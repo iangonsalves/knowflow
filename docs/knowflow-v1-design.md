@@ -100,7 +100,7 @@ All tenant-owned records carry workspace_id where practical, even if derivable. 
 | workspaces | id UUID PK; name non-empty; slug unique (global or scoped, open); created_by FK users; created_at, updated_at. deleted_at only if soft deletion is selected. |
 | workspace_memberships | workspace_id FK; user_id FK; role CHECK OWNER/MEMBER; created_by FK; created_at, updated_at; optional active status. Unique/PK (workspace_id,user_id). Index (user_id,workspace_id), (workspace_id,role). |
 | knowledge_areas | id UUID PK; workspace_id FK; name non-empty; description nullable; created_by FK; timestamps. Unique (workspace_id,normalized_name); index (workspace_id,name). |
-| documents | id UUID PK; workspace_id; knowledge_area_id; uploaded_by FK; original_filename; opaque storage_key UNIQUE; content_type CHECK application/pdf; byte_size > 0; sha256; page_count nullable; status enum; failure_code/safe_message nullable; timestamps; ready_at; deleted_at nullable; cleanup_completed_at nullable; purge_after nullable. Composite FK (workspace_id,knowledge_area_id) prevents cross-tenant area assignment. Index (workspace_id,area,status,created_at DESC), (workspace_id,created_at DESC), and cleanup index for purge_after. |
+| documents | id UUID PK; workspace_id; knowledge_area_id; uploaded_by FK; original_filename; opaque storage_key UNIQUE; content_type CHECK application/pdf; byte_size > 0; sha256; page_count nullable; status enum; failure_code/safe_message nullable; timestamps; ready_at; deleted_at nullable; cleanup_completed_at nullable; purge_after nullable. Composite FK (workspace_id,knowledge_area_id) prevents cross-tenant area assignment. Index (workspace_id,area,status,created_at DESC), (workspace_id,created_at DESC), and cleanup index for purge_after. V1 source access streams through the authorized API. |
 | processing_jobs | id UUID PK; workspace_id; document_id; job_type; status QUEUED/RUNNING/SUCCEEDED/RETRYABLE_FAILURE/PERMANENT_FAILURE/CANCELLED; attempt_count; max_attempts; available_at; locked_at/by nullable; last_error_code; created/updated/finished timestamps. Composite FK to document. Claim index (status,available_at,created_at); unique active job per document. V1 keeps one row and attempt count, no immutable attempts table. |
 | document_pages | id UUID PK; workspace_id; document_id; page_number > 0; text; optional hash; created_at. Unique (document_id,page_number), composite FK to document. |
 | document_chunks | id UUID PK; workspace_id; document_id; chunk_index >= 0; text; page_start > 0; page_end >= page_start; token_count nullable; content_hash; created_at. Unique (document_id,chunk_index), composite FK to document. Full-text tsvector with GIN; index (workspace_id,document_id,chunk_index). |
@@ -134,11 +134,11 @@ Auth is not locked by the blueprint. Next.js and FastAPI need an explicit identi
 
 Pricing and plans can change; verify vendor pages before creating production accounts. Current sources: [WorkOS pricing](https://workos.com/pricing), [WorkOS environments](https://workos.com/docs/authkit/environments), [WorkOS Next.js/Python guides](https://workos.com/docs/authkit), [WorkOS sessions](https://workos.com/docs/authkit/sessions), [Auth0 pricing](https://auth0.com/pricing), [Auth0 Next.js guide](https://developer.auth0.com/resources/guides/web-app/nextjs/basic-authentication), [Clerk pricing](https://clerk.com/pricing), [Clerk Next.js quickstart](https://clerk.com/docs/nextjs/getting-started/quickstart), [Entra External ID pricing](https://learn.microsoft.com/en-us/entra/external-id/external-identities-pricing), [Entra External ID overview](https://learn.microsoft.com/en-us/entra/external-id/customers/overview-solutions-customers).
 
-**Recommendation for approval: WorkOS AuthKit.** Its current free allowance is ample for a portfolio project, staging and production environments are separate, local staging supports localhost, and a local emulator is available. Its documented Next.js and Python paths fit the two-runtime stack; short-lived JWTs can be verified by FastAPI. WorkOS provides OAuth 2.0/OIDC support through its Connect product; the recommended AuthKit session flow is its managed hosted authentication flow with signed JWTs. If you require the application itself to use a strict generic OIDC relying-party flow rather than AuthKit's SDK-managed flow, Auth0 is the clearer alternative. Trade-offs: provider dependency; production requires billing details even below the free usage allowance; custom domain and enterprise SSO are unnecessary optional costs. Keep `workspace_memberships` as KnowFlow's authorization authority; do not use WorkOS organizations/roles to enforce data access. The provider is **not locked** until you approve it.
+**Approved: WorkOS AuthKit.** Its current free allowance is ample for a portfolio project, staging and production environments are separate, local staging supports localhost, and a local emulator is available. Its documented Next.js and Python paths fit the two-runtime stack; short-lived JWTs can be verified by FastAPI. Trade-offs: provider dependency; production requires billing details even below the free usage allowance; custom domain and enterprise SSO are unnecessary optional costs. KnowFlow workspace membership and Owner/Member authorization stay entirely in `workspace_memberships` and backend policy; do not use WorkOS organizations/roles to enforce data access.
 
 Auth0 is a strong fallback if its familiar tooling is preferred. Clerk is strong for Next.js UI velocity but its free organization/member limits need consideration. Entra External ID is reasonable for Azure alignment but has more setup for this stack.
 
-### Recommended authentication flow (provider approval required)
+### Approved authentication flow
 
 Browser redirects to hosted AuthKit through the Next.js server-side SDK. Next.js handles callback and stores a sealed session in a Secure, HttpOnly, SameSite=Lax cookie; refresh tokens remain server-side/sealed and rotate as required. Proposed app session max age is 7 days, with 12 hours inactivity timeout where supported. Configure backend access tokens for 15 minutes where provider settings allow. Browser calls same-origin Next.js routes/BFF. Next.js forwards a short-lived access token to FastAPI over HTTPS. FastAPI validates signature via JWKS plus issuer, audience and expiry, then maps immutable `sub` to internal `users.id`. Prefer this BFF design for a single-origin deployment. If direct browser-to-FastAPI calls are used, never expose a long-lived refresh token; use short-lived access tokens with strict CORS and CSRF protections. Cookie-authenticated mutations need CSRF defense. Do not implement before provider approval.
 
@@ -358,7 +358,7 @@ These are proposed starting points for a small portfolio deployment, not univers
 | `APP_SESSION_MAX_AGE_SECONDS` | 604,800 (7 days) | Avoids excessively persistent browser sessions while allowing normal return visits; refresh credentials stay sealed/server-side. |
 | `APP_SESSION_IDLE_TIMEOUT_SECONDS` | 43,200 (12 hours) | Proposed inactivity bound where provider/session configuration supports it. |
 
-Rate limits must be shared to be correct across multiple API replicas. A single-instance in-process limiter is acceptable only for a single-instance demo. If deployment uses multiple replicas, use managed gateway/provider limits or PostgreSQL-backed fixed-window counters before adding Redis solely for rate limiting. Also configure provider timeouts and spend alerts.
+Approved starting defaults are configurable and may be tuned later based on tests and the retrieval evaluation set. Keep initial rate limiting appropriate for a single-instance development/demo deployment; do not introduce Redis solely for rate limiting. If M8 deployment uses multiple API replicas, revisit rate-limit enforcement then and prefer a suitable gateway or database-backed approach before adding Redis solely for limits. Also configure provider timeouts and spend alerts.
 
 ## 15. Local Docker development
 
@@ -386,35 +386,33 @@ These gates start only after owner approval of this design.
 | M5 Embeddings/retrieval | Provider adapter, vectors, keyword/vector search and fusion | Fixed evaluation set, mocked provider, tenant filters | E-01..E-10 behavior recorded; results authorized and READY-only. |
 | M6 Grounded Q&A | Context, LLM adapter, schema, citations, abstention | Bogus citation, unsupported, injection fixtures | Cites only authorized retrieved evidence or abstains; no history stored. |
 | M7 UI/hardening | Main screens, role controls, states, rate limits, logs | E2E owner/member journey and security regressions | Upload-to-ready and ask-to-source flows work in deployed-like setup. |
-| M8 Release | Container build/deployment, secrets, object store, managed DB/runtime, health/backups | Deploy smoke, migration/rollback rehearsal, full journey | Demo runs securely; recovery notes exist; no V2 features included. |
+| M8 Release | Public portfolio demo, container build/deployment, secrets, object store, managed DB/runtime, health/backups | Deploy smoke, migration/rollback rehearsal, full journey | A publicly accessible live demo can be linked from portfolio, GitHub and CV; prefer suitable free tiers where practical, avoid unnecessary recurring costs, document recovery; no V2 features included. Evaluate services at M8 without redesigning V1 around one provider now. |
 
 At every milestone, update docs, preserve green tests, review migration impact and show acceptance path before advancing. Changes that expand blueprint scope require discussion first.
 
-## 17. Remaining decisions for final approval
+## 17. Decisions reserved for later milestones
 
 | Decision | Alternatives | Recommendation | Trade-off / input needed |
 |---|---|---|---|
-| Authentication provider | WorkOS AuthKit, Auth0, Clerk, Entra External ID | WorkOS AuthKit | Strong free headroom, staging/emulator, Next.js/Python support; production requires billing details and adds provider dependency. Not locked until you approve. |
 | Model provider | One vendor for embeddings and LLM; separate vendors | One provider behind interfaces | Choose before retrieval work based on residency, cost, dimensions, context, structured output and credentials. |
-| Numeric limits | Defaults in section 14 | Accept or adjust | Configurable and measurable; tune after evaluation/deployment. |
-| Rate-limit scaling | In-process; managed gateway; DB counters | Decide with deployment topology | In-process limits do not apply across replicas. |
-| Download strategy | API stream; short-lived signed URL | Decide with storage/viewer design | Streaming keeps authorization in API; signed URL is efficient but bearer capability. |
+| Deployment services | Free-tier hosting/storage/database vs paid managed services | Evaluate at M8 | Public live demo is required; favor suitable free tiers and avoid recurring cost where practical. Do not redesign V1 around a provider now. |
 
-The following are now decisions in the approved baseline: existing registered user membership only; Member document view/download; Owner-only management; reject non-empty area deletion; no history/OCR; RRF; vector on chunk; one durable job row; no RLS; MinIO with volume fallback; Azure Blob if Azure is selected; and simple citation snippets/page links. Their rationale is recorded in [the ADR set](adr/).
+The following are now approved: WorkOS AuthKit; app-owned workspace membership and Owner/Member authorization; the configurable defaults in Section 14; single-instance appropriate rate limiting without Redis; authorized API streaming; existing registered user membership only; Member document view/download; Owner-only management; rejection of non-empty area deletion; no history/OCR; RRF; vector on chunk; one durable job row; no RLS; MinIO with volume fallback; Azure Blob if Azure is selected; and simple citation snippets/page links. The provider for embeddings and LLM will be proposed for approval before M5. The public live demo requirement is recorded for M8; hosting choices will be evaluated then without reshaping the architecture now. See [the ADR set](adr/).
 
 ## ADR index
 
 | ADR | Decision |
 |---|---|
 | [0001](adr/0001-modular-monolith.md) | Modular monolith |
-| [0002](adr/0002-authentication-provider.md) | Managed OIDC; WorkOS recommendation pending approval |
+| [0002](adr/0002-authentication-provider.md) | WorkOS AuthKit with application-owned authorization |
 | [0003](adr/0003-database-enforced-tenant-scoping.md) | Workspace-scoped SQL and composite constraints; no V1 RLS |
-| [0004](adr/0004-object-storage-and-document-deletion.md) | Private object storage and deletion lifecycle |
+| [0004](adr/0004-object-storage-and-document-deletion.md) | Private object storage, authorized streaming and deletion lifecycle |
 | [0005](adr/0005-durable-database-worker.md) | PostgreSQL-backed jobs and separate worker |
 | [0006](adr/0006-chunks-and-embeddings.md) | Vector stored on chunk |
 | [0007](adr/0007-hybrid-retrieval-and-grounded-answers.md) | Keyword + vector retrieval, RRF, grounded citations |
 | [0008](adr/0008-v1-product-boundaries.md) | V1 scope boundaries |
+| [0009](adr/0009-public-portfolio-demo.md) | Public portfolio demo requirement for M8 |
 
 ## Approval gate
 
-The detailed design baseline is approved. Provider choice and the remaining configuration/operational defaults above are presented for final approval before application implementation begins. The approved blueprint remains the scope authority; any V2/V3 expansion will be discussed first. No application code has been generated.
+The detailed design baseline and the decisions above are approved. The model provider remains for approval before M5. The approved blueprint remains the scope authority; any V2/V3 expansion will be discussed first.

@@ -325,6 +325,8 @@ On pull requests: formatting/lint, frontend type-check and build, backend lint/t
 
 Start with a small managed container runtime for web/API/worker and managed PostgreSQL with pgvector, plus private object storage and managed secrets. Deploy a single region initially. Apply database migrations as a reviewed deployment step; use health/readiness checks and retain rollback ability. Store logs and basic metrics/errors with request IDs and job IDs. Azure Container Apps or an equivalent simple container platform could host the app, with Azure Database for PostgreSQL and Blob Storage if service availability, pgvector support, cost, and operational needs fit. Verify exact current service support at deployment design time.
 
+**Approved portfolio requirement (9 October 2026):** M8 must deliver a publicly accessible live demo that can be linked from the portfolio website, GitHub and CV. Prefer suitable free-tier hosting/services where practical and avoid unnecessary recurring costs. Do not redesign or weaken the approved V1 architecture around a particular free hosting provider before M8; evaluate deployment services when the application is ready to deploy.
+
 Do not choose Kubernetes, service mesh, Kafka, or complex cloud networking for a portfolio V1. A reliable small deployment with backups, environment separation, and observable worker failures is stronger evidence.
 
 ## 17. Implementation plan and acceptance milestones

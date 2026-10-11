@@ -8,7 +8,7 @@ PDF originals should not inflate relational backups or be exposed through public
 
 ## Decision
 
-Use an object storage adapter and opaque keys. Prefer MinIO for local development if Compose remains straightforward; otherwise use a mounted volume behind the same adapter. If Azure is selected, use private Azure Blob Storage in production. On deletion, revoke access immediately, retain a tombstone while retryable cleanup runs, and purge the tombstone 7 days after successful physical cleanup. Retry cleanup for up to 24 hours before surfacing operator attention; keep access revoked.
+Use an object storage adapter and opaque keys. Prefer MinIO for local development if Compose remains straightforward; otherwise use a mounted volume behind the same adapter. If Azure is selected, use private Azure Blob Storage in production. Stream documents through the authorized API in V1; signed URLs can be reconsidered only if there is a demonstrated need. On deletion, revoke access immediately, retain a tombstone while retryable cleanup runs, and purge the tombstone 7 days after successful physical cleanup. Retry cleanup for up to 24 hours before surfacing operator attention; keep access revoked.
 
 ## Alternatives
 

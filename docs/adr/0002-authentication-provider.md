@@ -1,6 +1,6 @@
 # ADR 0002 Managed OIDC provider
 
-**Status:** Proposed - provider approval required
+**Status:** Accepted for V1 (approved 9 October 2026)
 
 ## Context
 
@@ -8,7 +8,7 @@ KnowFlow uses Next.js and FastAPI and should avoid building password storage, re
 
 ## Decision
 
-Recommend WorkOS AuthKit. Use Next.js server-side session handling with a Secure, HttpOnly, SameSite=Lax cookie; keep refresh credentials in the sealed session; forward a short-lived JWT from the BFF to FastAPI. Proposed defaults are a 15-minute API access token, 7-day maximum app session, and 12-hour idle timeout where provider settings support them. FastAPI verifies JWKS signature, issuer, audience and expiry, then maps `sub` to an internal user. WorkOS organizations are not the app's authorization source. WorkOS supports OAuth 2.0/OIDC through Connect; AuthKit is its managed hosted login/session flow. If a strict generic OIDC relying-party integration is required, Auth0 is the clearer choice. This decision remains proposed pending owner approval.
+Use WorkOS AuthKit. Use Next.js server-side session handling with a Secure, HttpOnly, SameSite=Lax cookie; keep refresh credentials in the sealed session; forward a short-lived JWT from the BFF to FastAPI. Starting defaults are a 15-minute API access token, 7-day maximum app session, and 12-hour idle timeout where provider settings support them. FastAPI verifies JWKS signature, issuer, audience and expiry, then maps `sub` to an internal user. WorkOS organizations are not the app's authorization source. KnowFlow workspace membership and Owner/Member authorization remain entirely in the application/database.
 
 ## Alternatives
 
@@ -19,4 +19,4 @@ Recommend WorkOS AuthKit. Use Next.js server-side session handling with a Secure
 
 ## Consequences
 
-WorkOS offers current free headroom, separate staging/production and local emulator, with Next.js and Python integration paths. Production requires billing details even below its free usage threshold; optional custom domains and enterprise connections can cost extra. Verify current pricing before setup. If approved, tenant membership and roles remain in KnowFlow's database. Authentication implementation is blocked until provider approval.
+WorkOS offers current free headroom, separate staging/production and local emulator, with Next.js and Python integration paths. Production requires billing details even below its free usage threshold; optional custom domains and enterprise connections can cost extra. Verify current pricing before setup. Provider pricing was reviewed on 9 October 2026 and must be rechecked before production setup.

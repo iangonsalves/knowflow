@@ -1,0 +1,80 @@
+:root {
+  color-scheme: light;
+  --ink: #15233b;
+  --muted: #58677d;
+  --paper: #f4f7fb;
+  --card: #ffffff;
+  --line: #dfe6ef;
+  --accent: #186b62;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background: radial-gradient(circle at 50% 20%, #e7f2f0 0, var(--paper) 45%);
+  color: var(--ink);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+}
+
+.status-card {
+  width: min(100%, 560px);
+  padding: 44px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--card);
+  box-shadow: 0 24px 70px rgb(21 35 59 / 8%);
+}
+
+.eyebrow {
+  margin: 0 0 12px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(36px, 8vw, 56px);
+  letter-spacing: -0.045em;
+}
+
+.description {
+  max-width: 430px;
+  margin: 16px 0 28px;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #20a274;
+  box-shadow: 0 0 0 4px #e3f5ef;
+}
