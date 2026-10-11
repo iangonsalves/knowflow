@@ -40,6 +40,11 @@ services:
     environment:
       KNOWFLOW_DATABASE_URL: ${KNOWFLOW_DATABASE_URL:-postgresql+psycopg://knowflow:knowflow_local_only@db:5432/knowflow}
       KNOWFLOW_APP_ENV: ${KNOWFLOW_APP_ENV:-development}
+      WORKOS_CLIENT_ID: ${WORKOS_CLIENT_ID:-}
+      WORKOS_API_KEY: ${WORKOS_API_KEY:-}
+      WORKOS_ISSUER: ${WORKOS_ISSUER:-}
+      WORKOS_TOKEN_AUDIENCE: ${WORKOS_TOKEN_AUDIENCE:-https://api.knowflow.example}
+      KNOWFLOW_WORKOS_API_BASE_URL: ${KNOWFLOW_WORKOS_API_BASE_URL:-https://api.workos.com}
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "${API_PORT:-8000}:8000"
@@ -56,6 +61,12 @@ services:
     environment:
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
       API_INTERNAL_BASE_URL: ${API_INTERNAL_BASE_URL:-http://api:8000}
+      WORKOS_CLIENT_ID: ${WORKOS_CLIENT_ID:-}
+      WORKOS_API_KEY: ${WORKOS_API_KEY:-}
+      WORKOS_COOKIE_PASSWORD: ${WORKOS_COOKIE_PASSWORD:-}
+      NEXT_PUBLIC_WORKOS_REDIRECT_URI: ${NEXT_PUBLIC_WORKOS_REDIRECT_URI:-http://localhost:3000/callback}
+      WORKOS_COOKIE_MAX_AGE: ${WORKOS_COOKIE_MAX_AGE:-604800}
+      WORKOS_COOKIE_SAMESITE: ${WORKOS_COOKIE_SAMESITE:-lax}
       WATCHPACK_POLLING: "true"
     command: npm run dev
     ports:

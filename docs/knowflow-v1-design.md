@@ -1,8 +1,8 @@
 # KnowFlow V1 Product and Technical Design
 
-**Detailed design for review | 9 October 2026 | Version 1.0**
+**Approved V1 design baseline | 9 October 2026 | Version 1.0**
 
-This document translates the approved KnowFlow Project Blueprint into a detailed V1 specification. The blueprint governs scope. This design does not authorize implementation. Decisions marked **Locked** come from the owner or approved blueprint; **Recommendation** identifies a preferred option that still needs approval; **Open decision** lists alternatives that should be resolved before implementation.
+This document translates the approved KnowFlow Project Blueprint into the detailed V1 specification. The blueprint governs scope. Implementation proceeds only in owner-approved milestones. Decisions marked **Locked** come from the owner or approved blueprint; **Recommendation** identifies a preferred option; **Open decision** lists alternatives that need approval before the relevant milestone.
 
 ## 1. Product specification and acceptance criteria
 
@@ -96,7 +96,7 @@ All tenant-owned records carry workspace_id where practical, even if derivable. 
 
 | Table | Fields and rules |
 |---|---|
-| users | id UUID PK; auth_subject text UNIQUE NOT NULL; email normalized text UNIQUE NOT NULL; display_name nullable; created_at, updated_at timestamptz. If auth provider owns users, keep only an internal profile mapped by immutable subject. |
+| users | id UUID PK; auth_subject text UNIQUE NOT NULL; email normalized text UNIQUE NOT NULL; email_verified boolean; display_name nullable; created_at, updated_at timestamptz. The provider user is mapped by immutable subject; email is profile data, never an authorization key. |
 | workspaces | id UUID PK; name non-empty; slug unique (global or scoped, open); created_by FK users; created_at, updated_at. deleted_at only if soft deletion is selected. |
 | workspace_memberships | workspace_id FK; user_id FK; role CHECK OWNER/MEMBER; created_by FK; created_at, updated_at; optional active status. Unique/PK (workspace_id,user_id). Index (user_id,workspace_id), (workspace_id,role). |
 | knowledge_areas | id UUID PK; workspace_id FK; name non-empty; description nullable; created_by FK; timestamps. Unique (workspace_id,normalized_name); index (workspace_id,name). |
@@ -134,13 +134,13 @@ Auth is not locked by the blueprint. Next.js and FastAPI need an explicit identi
 
 Pricing and plans can change; verify vendor pages before creating production accounts. Current sources: [WorkOS pricing](https://workos.com/pricing), [WorkOS environments](https://workos.com/docs/authkit/environments), [WorkOS Next.js/Python guides](https://workos.com/docs/authkit), [WorkOS sessions](https://workos.com/docs/authkit/sessions), [Auth0 pricing](https://auth0.com/pricing), [Auth0 Next.js guide](https://developer.auth0.com/resources/guides/web-app/nextjs/basic-authentication), [Clerk pricing](https://clerk.com/pricing), [Clerk Next.js quickstart](https://clerk.com/docs/nextjs/getting-started/quickstart), [Entra External ID pricing](https://learn.microsoft.com/en-us/entra/external-id/external-identities-pricing), [Entra External ID overview](https://learn.microsoft.com/en-us/entra/external-id/customers/overview-solutions-customers).
 
-**Approved: WorkOS AuthKit.** Its current free allowance is ample for a portfolio project, staging and production environments are separate, local staging supports localhost, and a local emulator is available. Its documented Next.js and Python paths fit the two-runtime stack; short-lived JWTs can be verified by FastAPI. Trade-offs: provider dependency; production requires billing details even below the free usage allowance; custom domain and enterprise SSO are unnecessary optional costs. KnowFlow workspace membership and Owner/Member authorization stay entirely in `workspace_memberships` and backend policy; do not use WorkOS organizations/roles to enforce data access.
+**Approved: WorkOS AuthKit.** Its current free allowance is ample for a portfolio project, staging and production environments are separate, local staging supports localhost, and a local emulator is available. Its documented Next.js and Python paths fit the two-runtime stack; short-lived JWTs can be verified by FastAPI. Trade-offs: provider dependency; production requires billing details even below the free usage allowance; custom domain and enterprise SSO are unnecessary optional costs. KnowFlow workspace membership and Owner/Member authorization stay entirely in `workspace_memberships` and backend policy; do not use WorkOS organizations/roles to enforce data access. M2 verifies RS256 tokens using the WorkOS JWKS, configured issuer and API audience, then maps `sub` to an internal user. AuthKit access tokens omit `aud` by default; configure the WorkOS JWT template with the exact `WORKOS_TOKEN_AUDIENCE` value (local default `https://api.knowflow.example`). WorkOS user-management data is retrieved server-to-server for initial profile mapping and existing-account membership provisioning.
 
 Auth0 is a strong fallback if its familiar tooling is preferred. Clerk is strong for Next.js UI velocity but its free organization/member limits need consideration. Entra External ID is reasonable for Azure alignment but has more setup for this stack.
 
 ### Approved authentication flow
 
-Browser redirects to hosted AuthKit through the Next.js server-side SDK. Next.js handles callback and stores a sealed session in a Secure, HttpOnly, SameSite=Lax cookie; refresh tokens remain server-side/sealed and rotate as required. Proposed app session max age is 7 days, with 12 hours inactivity timeout where supported. Configure backend access tokens for 15 minutes where provider settings allow. Browser calls same-origin Next.js routes/BFF. Next.js forwards a short-lived access token to FastAPI over HTTPS. FastAPI validates signature via JWKS plus issuer, audience and expiry, then maps immutable `sub` to internal `users.id`. Prefer this BFF design for a single-origin deployment. If direct browser-to-FastAPI calls are used, never expose a long-lived refresh token; use short-lived access tokens with strict CORS and CSRF protections. Cookie-authenticated mutations need CSRF defense. Do not implement before provider approval.
+Browser redirects to hosted AuthKit through the Next.js server-side SDK. Next.js handles the PKCE callback and stores a sealed session in a Secure, HttpOnly, SameSite=Lax cookie; refresh tokens remain server-side/sealed and rotate as required. M2 sets the application cookie maximum age to 7 days; configure the WorkOS environment for the approved 15-minute API token and 12-hour idle policy where available. Next.js server components/actions forward a short-lived access token to FastAPI. FastAPI validates signature via JWKS plus issuer, audience and expiry, then maps immutable `sub` to internal `users.id`. Cookie-authenticated mutations use Next.js Server Actions and their same-origin protections. Do not expose access or refresh tokens to browser JavaScript.
 
 ## 5. Owner/Member authorization matrix
 
@@ -270,6 +270,8 @@ Base `/api/v1`; UUID identifiers; JSON error envelope `{"error":{"code":"...","m
 | Questions | `POST /workspaces/{wid}/questions` with question and optional area; returns answer/citation/abstention contract. Not persisted. |
 
 Every workspace endpoint verifies membership. Validate query length, upload size, result count, rate and provider budget. Search may expose source mix for diagnostics but not raw similarity as user-facing truth. Content endpoint streams only after authorization or returns short-lived signed URL.
+
+M2 implements `GET /me`, workspace list/create/read, workspace member list/add/update-role/remove. Add-member accepts only an existing WorkOS account with a verified email. Workspace reads use membership-scoped SQL and return 404 for an inaccessible workspace. API errors follow the documented error envelope with a request ID.
 
 ## 12. Repository/module structure
 

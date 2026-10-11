@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     app_env: Literal["development", "test", "production"] = "development"
     database_url: str = "postgresql+psycopg://knowflow:knowflow_local_only@db:5432/knowflow"
     allowed_origins: list[str] = ["http://localhost:3000"]
+    workos_client_id: str | None = Field(default=None, validation_alias="WORKOS_CLIENT_ID")
+    workos_api_key: str | None = Field(default=None, validation_alias="WORKOS_API_KEY")
+    workos_issuer: str | None = Field(default=None, validation_alias="WORKOS_ISSUER")
+    workos_token_audience: str | None = Field(
+        default="https://api.knowflow.example", validation_alias="WORKOS_TOKEN_AUDIENCE"
+    )
+    workos_api_base_url: str = "https://api.workos.com"
 
     max_upload_bytes: int = Field(default=20 * 1024 * 1024, gt=0)
     max_pdf_pages: int = Field(default=250, gt=0)
