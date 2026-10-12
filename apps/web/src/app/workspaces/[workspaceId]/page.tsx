@@ -45,7 +45,11 @@ export default async function WorkspacePage({
         <Link className="back-link" href="/workspaces">← All workspaces</Link>
         <p className="eyebrow">Workspace</p>
         <div className="title-row"><h1 className="page-title">{workspace.name}</h1><span className={`role-pill ${isOwner ? "role-owner" : ""}`}>{isOwner ? "Owner" : "Member"}</span></div>
-        <p className="page-intro">This page demonstrates workspace membership and server-enforced roles. Knowledge areas and documents arrive in later milestones.</p>
+        <p className="page-intro">Organize internal documents into knowledge areas and manage workspace access.</p>
+        <nav className="section-nav" aria-label="Workspace sections">
+          <Link className="button button-secondary" href={`/workspaces/${workspaceId}/knowledge-areas`}>Knowledge areas</Link>
+          <Link className="button button-secondary" href={`/workspaces/${workspaceId}/documents`}>Documents</Link>
+        </nav>
         {error ? <p className="notice notice-error" role="alert">{error}</p> : null}
         <section className="panel" aria-labelledby="members-title">
           <div className="panel-heading"><div><h2 id="members-title">Members</h2><p>Membership is scoped to this workspace.</p></div></div>

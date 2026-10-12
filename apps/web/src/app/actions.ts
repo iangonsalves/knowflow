@@ -12,7 +12,9 @@ async function authorizedFetch(path: string, init: RequestInit): Promise<Respons
   if (!user || !accessToken) redirect("/sign-in");
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${accessToken}`);
-  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   return fetch(`${apiBaseUrl}/api/v1${path}`, { ...init, headers, cache: "no-store" });
 }
 
@@ -64,6 +66,69 @@ export async function removeMember(formData: FormData): Promise<void> {
     `/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`,
     { method: "DELETE" },
   );
+  if (!response.ok) redirectWithError(path, await responseMessage(response));
+  redirect(path);
+}
+
+export async function createKnowledgeArea(formData: FormData): Promise<void> {
+  const workspaceId = String(formData.get("workspace_id") ?? "");
+  const path = `/workspaces/${encodeURIComponent(workspaceId)}`;
+  const response = await authorizedFetch(`${path}/knowledge-areas`, {
+    method: "POST",
+    body: JSON.stringify({
+      name: String(formData.get("name") ?? "").trim(),
+      description: String(formData.get("description") ?? "").trim() || null,
+    }),
+  });
+  if (!response.ok) redirectWithError(`${path}/knowledge-areas`, await responseMessage(response));
+  redirect(`${path}/knowledge-areas`);
+}
+
+export async function updateKnowledgeArea(formData: FormData): Promise<void> {
+  const workspaceId = String(formData.get("workspace_id") ?? "");
+  const areaId = String(formData.get("area_id") ?? "");
+  const path = `/workspaces/${encodeURIComponent(workspaceId)}/knowledge-areas`;
+  const response = await authorizedFetch(`${path}/${encodeURIComponent(areaId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      name: String(formData.get("name") ?? "").trim(),
+      description: String(formData.get("description") ?? "").trim() || null,
+    }),
+  });
+  if (!response.ok) redirectWithError(path, await responseMessage(response));
+  redirect(path);
+}
+
+export async function deleteKnowledgeArea(formData: FormData): Promise<void> {
+  const workspaceId = String(formData.get("workspace_id") ?? "");
+  const areaId = String(formData.get("area_id") ?? "");
+  const path = `/workspaces/${encodeURIComponent(workspaceId)}/knowledge-areas`;
+  const response = await authorizedFetch(`${path}/${encodeURIComponent(areaId)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) redirectWithError(path, await responseMessage(response));
+  redirect(path);
+}
+
+export async function uploadDocument(formData: FormData): Promise<void> {
+  const workspaceId = String(formData.get("workspace_id") ?? "");
+  const path = `/workspaces/${encodeURIComponent(workspaceId)}/documents`;
+  const body = new FormData();
+  body.set("knowledge_area_id", String(formData.get("knowledge_area_id") ?? ""));
+  const file = formData.get("file");
+  if (file instanceof File) body.set("file", file);
+  const response = await authorizedFetch(path, { method: "POST", body });
+  if (!response.ok) redirectWithError(path, await responseMessage(response));
+  redirect(path);
+}
+
+export async function deleteDocument(formData: FormData): Promise<void> {
+  const workspaceId = String(formData.get("workspace_id") ?? "");
+  const documentId = String(formData.get("document_id") ?? "");
+  const path = `/workspaces/${encodeURIComponent(workspaceId)}/documents`;
+  const response = await authorizedFetch(`${path}/${encodeURIComponent(documentId)}`, {
+    method: "DELETE",
+  });
   if (!response.ok) redirectWithError(path, await responseMessage(response));
   redirect(path);
 }
