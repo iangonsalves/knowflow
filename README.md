@@ -4,7 +4,7 @@ KnowFlow is a workspace-based business knowledge platform. Its approved product 
 
 ## Current milestone
 
-M1 Foundation and M2 Identity & Tenancy are implemented. M2 adds WorkOS AuthKit login, internal identity mapping, workspace membership, and Owner/Member access. Knowledge areas, documents, processing, search, and answers remain later milestones.
+M1 Foundation, M2 Identity & Tenancy, and M3 Knowledge Areas & Documents are implemented. M3 adds workspace-scoped areas, private PDF upload and storage, document metadata, authorized viewing/download, and deletion with a retained cleanup tombstone. Text extraction, processing jobs, search, and answers remain later milestones.
 
 ## Requirements
 
@@ -48,8 +48,12 @@ The local services are:
 - API liveness/readiness: <http://localhost:8000/health/live> and <http://localhost:8000/health/ready>
 - Identity API: `GET /api/v1/me`
 - Workspace API: `GET/POST /api/v1/workspaces`, `GET /api/v1/workspaces/{id}`, and workspace member endpoints.
+- Knowledge areas: `GET/POST /api/v1/workspaces/{id}/knowledge-areas`, `GET/PATCH/DELETE /api/v1/workspaces/{id}/knowledge-areas/{area_id}`. Members can read; Owners manage.
+- Documents: `GET/POST /api/v1/workspaces/{id}/documents`, `GET/DELETE /api/v1/workspaces/{id}/documents/{document_id}`, and `GET /api/v1/workspaces/{id}/documents/{document_id}/content`. Owners upload/delete; Members can view/download. Originals are private MinIO objects locally; PostgreSQL stores metadata.
 - PostgreSQL with pgvector: `localhost:5432`
 - MinIO console: <http://localhost:9001>
+
+M3 accepts PDF files with a valid PDF structure, no password protection, up to 20 MiB and 250 pages. Processing status remains `UPLOADED` in M3; extraction, text-based/scanned content checks, and downstream processing are M4 work. A deleted document immediately returns 404 to application requests. Storage cleanup is retried on an Owner delete request for up to 24 hours; after successful cleanup, the metadata tombstone remains for 7 days and is then purged during subsequent document/area operations.
 
 Readiness is expected to fail until the database migrations have been applied. Copy `.env.example` to `.env`, configure WorkOS, then start Compose. The example database and object-store credentials are local development defaults only.
 

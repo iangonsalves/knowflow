@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     )
     workos_api_base_url: str = "https://api.workos.com"
 
+    object_storage_endpoint_url: str = "http://object-store:9000"
+    object_storage_access_key: str = "knowflow_local"
+    object_storage_secret_key: str = "knowflow_minio_local_only"
+    object_storage_bucket: str = "knowflow-documents"
+    object_storage_region: str = "us-east-1"
+
     max_upload_bytes: int = Field(default=20 * 1024 * 1024, gt=0)
     max_pdf_pages: int = Field(default=250, gt=0)
     max_question_chars: int = Field(default=2_000, gt=0)
