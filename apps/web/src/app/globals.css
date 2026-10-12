@@ -333,6 +333,33 @@ h1 {
   letter-spacing: 0.03em;
 }
 
+.status-processing {
+  background: #eef2ff;
+  color: #3c4f9c;
+}
+
+.status-uploaded {
+  background: #edf1f6;
+  color: #435168;
+}
+
+.status-ready {
+  background: #e5f4f0;
+  color: #146456;
+}
+
+.status-failed {
+  background: #fff0f0;
+  color: #a63838;
+}
+
+.processing-error {
+  margin: 7px 0 0;
+  color: #8b2f2f;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .viewer-panel {
   padding: 0;
   overflow: hidden;

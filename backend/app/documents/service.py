@@ -5,11 +5,20 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, UploadFile
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db.models import Document, DocumentStatus, KnowledgeArea
+from app.core.config import get_settings
+from app.db.models import (
+    Document,
+    DocumentChunk,
+    DocumentPage,
+    DocumentStatus,
+    KnowledgeArea,
+    ProcessingJob,
+    ProcessingJobStatus,
+)
 from app.documents.lifecycle import (
     cleanup_retry_expired,
     mark_cleanup_complete,
@@ -54,6 +63,65 @@ def get_document(session: Session, access: WorkspaceAccess, document_id: UUID) -
 
 def get_document_record(session: Session, access: WorkspaceAccess, document_id: UUID) -> Document:
     return _find_active_document(session, access.workspace.id, document_id)
+
+
+def retry_document_processing(
+    session: Session, access: WorkspaceAccess, document_id: UUID
+) -> DocumentResponse:
+    require_owner(access)
+    document = _find_active_document(session, access.workspace.id, document_id)
+    if document.status != DocumentStatus.FAILED.value:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "document_not_failed",
+                "message": "Only failed document processing can be retried",
+            },
+        )
+    job = session.scalar(
+        select(ProcessingJob).where(
+            ProcessingJob.workspace_id == access.workspace.id,
+            ProcessingJob.document_id == document.id,
+        )
+    )
+    if job is None or job.status not in {
+        ProcessingJobStatus.PERMANENT_FAILURE.value,
+        ProcessingJobStatus.RETRYABLE_FAILURE.value,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "processing_job_unavailable", "message": "The job cannot be retried"},
+        )
+
+    session.execute(
+        delete(DocumentChunk).where(
+            DocumentChunk.workspace_id == access.workspace.id,
+            DocumentChunk.document_id == document.id,
+        )
+    )
+    session.execute(
+        delete(DocumentPage).where(
+            DocumentPage.workspace_id == access.workspace.id,
+            DocumentPage.document_id == document.id,
+        )
+    )
+    now = datetime.now(UTC)
+    job.status = ProcessingJobStatus.QUEUED.value
+    job.attempt_count = 0
+    job.max_attempts = get_settings().worker_max_attempts
+    job.available_at = now
+    job.locked_at = None
+    job.locked_by = None
+    job.lease_token = None
+    job.last_error_code = None
+    job.last_error_message = None
+    job.finished_at = None
+    document.status = DocumentStatus.UPLOADED.value
+    document.processing_error_code = None
+    document.processing_error_message = None
+    session.commit()
+    session.refresh(document)
+    return DocumentResponse.model_validate(document)
 
 
 def upload_document(
@@ -107,7 +175,16 @@ def upload_document(
         sha256=validated_pdf.sha256,
         status=DocumentStatus.UPLOADED.value,
     )
-    session.add(document)
+    settings = get_settings()
+    job = ProcessingJob(
+        workspace_id=access.workspace.id,
+        document_id=document.id,
+        job_type="PROCESS_DOCUMENT",
+        status=ProcessingJobStatus.QUEUED.value,
+        attempt_count=0,
+        max_attempts=settings.worker_max_attempts,
+    )
+    session.add_all([document, job])
     try:
         session.commit()
     except IntegrityError as error:
@@ -141,6 +218,35 @@ def mark_document_deleted(
     if document.deleted_at is None:
         document.deleted_at = datetime.now(UTC)
         document.status = DocumentStatus.DELETING.value
+        document.processing_error_code = None
+        document.processing_error_message = None
+        job = session.scalar(
+            select(ProcessingJob).where(
+                ProcessingJob.workspace_id == access.workspace.id,
+                ProcessingJob.document_id == document.id,
+            )
+        )
+        if job is not None and job.status not in {
+            ProcessingJobStatus.SUCCEEDED.value,
+            ProcessingJobStatus.CANCELLED.value,
+        }:
+            job.status = ProcessingJobStatus.CANCELLED.value
+            job.locked_at = None
+            job.locked_by = None
+            job.lease_token = None
+            job.finished_at = datetime.now(UTC)
+        session.execute(
+            delete(DocumentChunk).where(
+                DocumentChunk.workspace_id == access.workspace.id,
+                DocumentChunk.document_id == document.id,
+            )
+        )
+        session.execute(
+            delete(DocumentPage).where(
+                DocumentPage.workspace_id == access.workspace.id,
+                DocumentPage.document_id == document.id,
+            )
+        )
         session.commit()
     elif document.cleanup_completed_at is not None:
         return

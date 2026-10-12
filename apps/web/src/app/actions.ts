@@ -133,6 +133,18 @@ export async function deleteDocument(formData: FormData): Promise<void> {
   redirect(path);
 }
 
+export async function retryDocument(formData: FormData): Promise<void> {
+  const workspaceId = String(formData.get("workspace_id") ?? "");
+  const documentId = String(formData.get("document_id") ?? "");
+  const path = `/workspaces/${encodeURIComponent(workspaceId)}/documents`;
+  const response = await authorizedFetch(
+    `${path}/${encodeURIComponent(documentId)}/retry`,
+    { method: "POST" },
+  );
+  if (!response.ok) redirectWithError(path, await responseMessage(response));
+  redirect(path);
+}
+
 export async function signOutAction(): Promise<void> {
   await signOut();
 }

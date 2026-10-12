@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { deleteDocument, signOutAction, uploadDocument } from "@/app/actions";
+import { deleteDocument, retryDocument, signOutAction, uploadDocument } from "@/app/actions";
 import { apiFetch } from "@/lib/api";
 
 type Workspace = { id: string; name: string; role: "OWNER" | "MEMBER" };
@@ -13,11 +13,17 @@ type Document = {
   byte_size: number;
   page_count: number;
   status: "UPLOADED" | "PROCESSING" | "READY" | "FAILED" | "DELETING";
+  processing_error_code: string | null;
+  processing_error_message: string | null;
   created_at: string;
 };
 
 function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
+}
+
+function formatStatus(status: Document["status"]): string {
+  return status === "UPLOADED" ? "Uploaded" : status[0] + status.slice(1).toLowerCase();
 }
 
 export default async function DocumentsPage({
@@ -74,8 +80,8 @@ export default async function DocumentsPage({
           <div className="panel-heading"><div><h2 id="document-list-title">{query.knowledge_area_id ? `Area: ${areaNames.get(query.knowledge_area_id) ?? "Documents"}` : "All documents"}</h2><p>{documents.length} {documents.length === 1 ? "document" : "documents"}</p></div>{query.knowledge_area_id ? <Link className="text-button" href={`${workspacePath}/documents`}>Clear filter</Link> : null}</div>
           {documents.length ? <ul className="document-list">{documents.map((document) => (
             <li key={document.id} className="document-row">
-              <div className="document-main"><span className="document-icon" aria-hidden="true">PDF</span><div><Link className="document-title" href={`${workspacePath}/documents/${document.id}`}>{document.original_filename}</Link><p className="workspace-meta">{areaNames.get(document.knowledge_area_id) ?? "Knowledge area"} · {document.page_count} pages · {formatSize(document.byte_size)}</p></div></div>
-              <div className="document-actions"><span className="status-pill">{document.status}</span><Link className="text-button" href={`${workspacePath}/documents/${document.id}`}>Open</Link><a className="text-button" href={`/api${workspacePath}/documents/${document.id}/content?download=true`}>Download</a>{isOwner ? <form action={deleteDocument}><input type="hidden" name="workspace_id" value={workspaceId} /><input type="hidden" name="document_id" value={document.id} /><button className="text-button text-danger" type="submit">Delete</button></form> : null}</div>
+              <div className="document-main"><span className="document-icon" aria-hidden="true">PDF</span><div><Link className="document-title" href={`${workspacePath}/documents/${document.id}`}>{document.original_filename}</Link><p className="workspace-meta">{areaNames.get(document.knowledge_area_id) ?? "Knowledge area"} · {document.page_count} pages · {formatSize(document.byte_size)}</p>{document.processing_error_message ? <p className="processing-error" role="status">{document.processing_error_message}</p> : null}</div></div>
+              <div className="document-actions"><span className={`status-pill status-${document.status.toLowerCase()}`}>{formatStatus(document.status)}</span><Link className="text-button" href={`${workspacePath}/documents/${document.id}`}>Open</Link><a className="text-button" href={`/api${workspacePath}/documents/${document.id}/content?download=true`}>Download</a>{isOwner && document.status === "FAILED" ? <form action={retryDocument}><input type="hidden" name="workspace_id" value={workspaceId} /><input type="hidden" name="document_id" value={document.id} /><button className="text-button" type="submit">Retry processing</button></form> : null}{isOwner ? <form action={deleteDocument}><input type="hidden" name="workspace_id" value={workspaceId} /><input type="hidden" name="document_id" value={document.id} /><button className="text-button text-danger" type="submit">Delete</button></form> : null}</div>
             </li>
           ))}</ul> : <p className="empty-state">No documents have been uploaded{query.knowledge_area_id ? " to this area" : " yet"}.</p>}
         </section>

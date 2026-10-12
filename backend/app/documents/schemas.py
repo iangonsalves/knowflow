@@ -20,5 +20,7 @@ class DocumentResponse(BaseModel):
     byte_size: int
     page_count: int
     status: DocumentStatus
+    processing_error_code: str | None
+    processing_error_message: str | None
     created_at: datetime
     updated_at: datetime

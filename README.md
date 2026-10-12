@@ -4,7 +4,7 @@ KnowFlow is a workspace-based business knowledge platform. Its approved product 
 
 ## Current milestone
 
-M1 Foundation, M2 Identity & Tenancy, and M3 Knowledge Areas & Documents are implemented. M3 adds workspace-scoped areas, private PDF upload and storage, document metadata, authorized viewing/download, and deletion with a retained cleanup tombstone. Text extraction, processing jobs, search, and answers remain later milestones.
+M1 Foundation, M2 Identity & Tenancy, M3 Knowledge Areas & Documents, and M4 Document Processing Worker are implemented. M4 adds a durable PostgreSQL job queue and a separate backend worker that extracts PDF page text and stores page-aware chunks. Embeddings, search, and answers remain later milestones.
 
 ## Requirements
 
@@ -52,8 +52,28 @@ The local services are:
 - Documents: `GET/POST /api/v1/workspaces/{id}/documents`, `GET/DELETE /api/v1/workspaces/{id}/documents/{document_id}`, and `GET /api/v1/workspaces/{id}/documents/{document_id}/content`. Owners upload/delete; Members can view/download. Originals are private MinIO objects locally; PostgreSQL stores metadata.
 - PostgreSQL with pgvector: `localhost:5432`
 - MinIO console: <http://localhost:9001>
+- Document worker: the `worker` Compose service, using the same backend image/code as the API.
 
-M3 accepts PDF files with a valid PDF structure, no password protection, up to 20 MiB and 250 pages. Processing status remains `UPLOADED` in M3; extraction, text-based/scanned content checks, and downstream processing are M4 work. A deleted document immediately returns 404 to application requests. Storage cleanup is retried on an Owner delete request for up to 24 hours; after successful cleanup, the metadata tombstone remains for 7 days and is then purged during subsequent document/area operations.
+Uploads create a `PROCESS_DOCUMENT` job in the same PostgreSQL transaction as document metadata. Job states are `QUEUED`, `RUNNING`, `RETRYABLE_FAILURE`, `PERMANENT_FAILURE`, `SUCCEEDED`, and `CANCELLED`; document states are `UPLOADED`, `PROCESSING`, `READY`, `FAILED`, and `DELETING`. The worker extracts text per page, normalizes it, creates deterministic overlapping chunks, and commits pages, chunks, `READY`, and `SUCCEEDED` atomically. Empty/scanned or malformed PDFs fail without OCR. A deleted document's queued/running work is cancelled and derived rows are removed.
+
+Follow worker logs with:
+
+```sh
+docker compose logs -f worker
+```
+
+Inspect job state and safe error details with:
+
+```sh
+docker compose exec db psql -U knowflow -d knowflow -c \
+  "SELECT j.id, j.document_id, j.status, j.attempt_count, j.available_at, j.last_error_code, d.status AS document_status FROM processing_jobs j JOIN documents d ON d.id = j.document_id ORDER BY j.created_at DESC LIMIT 20;"
+```
+
+Owners can retry failed documents from the document list. Job attempts use the configured maximum and bounded backoff; a worker crash is recovered after the lease expires. No Redis or external queue is used.
+
+Chunking is configurable with `KNOWFLOW_CHUNK_SIZE_CHARS` (default 1800) and `KNOWFLOW_CHUNK_OVERLAP_CHARS` (default 240). These provisional character-based defaults prefer paragraph/sentence boundaries and keep chunks within one source page; they can be tuned before retrieval work without changing the schema. M4 does not count tokens or generate embeddings.
+
+M3 upload validation accepts PDFs with a valid structure, no password protection, up to 20 MiB and 250 pages. A deleted document immediately returns 404 to application requests. Storage cleanup is retried on an Owner delete request for up to 24 hours; after successful cleanup, the metadata tombstone remains for 7 days and is then purged during subsequent document/area operations.
 
 Readiness is expected to fail until the database migrations have been applied. Copy `.env.example` to `.env`, configure WorkOS, then start Compose. The example database and object-store credentials are local development defaults only.
 

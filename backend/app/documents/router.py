@@ -28,6 +28,7 @@ from app.documents.service import (
     get_document_record,
     list_documents,
     mark_document_deleted,
+    retry_document_processing,
     upload_document,
 )
 from app.documents.storage import (
@@ -83,6 +84,17 @@ def read_document(
 ) -> DocumentResponse:
     access = require_workspace_access(session, current_user, workspace_id)
     return get_document(session, access, document_id)
+
+
+@router.post("/{document_id}/retry", response_model=DocumentResponse)
+def post_document_retry(
+    workspace_id: UUID,
+    document_id: UUID,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> DocumentResponse:
+    access = require_workspace_access(session, current_user, workspace_id)
+    return retry_document_processing(session, access, document_id)
 
 
 @router.get("/{document_id}/content")

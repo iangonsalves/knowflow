@@ -185,7 +185,11 @@ Local storage: use MinIO through an S3-compatible storage adapter if Compose rem
 
 ### Lifecycle
 
-Document state: `UPLOADED -> PROCESSING -> READY`, with `FAILED`; use `DELETING` if needed for cleanup. Job state is separate. Worker extracts page text, rejects no-text scans, normalizes preserving pages, chunks, embeds, stages outputs, then atomically swaps derived records and marks READY. Only READY/non-deleted docs are searchable.
+Document state: `UPLOADED -> PROCESSING -> READY`, with `FAILED`; use `DELETING` if needed for cleanup. Job state is separate. In M4, the worker extracts page text, rejects no-text scans, normalizes while preserving page numbers, creates deterministic overlapping chunks, and atomically persists pages/chunks before marking the document READY. Embeddings and search are deferred to M5. Only READY, non-deleted documents are eligible for later search.
+
+M4 chunking uses configurable character-based defaults (`KNOWFLOW_CHUNK_SIZE_CHARS=1800`, `KNOWFLOW_CHUNK_OVERLAP_CHARS=240`) because no tokenizer/provider is selected yet. Boundaries prefer paragraph, sentence, and whitespace edges; chunks remain page-local to retain exact source-page provenance. These are provisional engineering defaults to evaluate before M5, not model-token limits. Each page and chunk stores a SHA-256 content hash. Chunk rows reserve `token_count` for later use; M4 does not populate it or generate embeddings.
+
+M4 uses one durable processing job per document. PostgreSQL `FOR UPDATE SKIP LOCKED` prevents two workers claiming the same queued row. Each claim increments the attempt count and carries a renewable lease token; expired leases can be recovered, while the token fences stale workers from committing results. Transient failures use the configured bounded retry schedule; permanent source/PDF failures become FAILED. The pages/chunks and READY/SUCCEEDED transition commit in one transaction. Deletion cancels outstanding work and removes derived rows; a worker that races with deletion cannot persist output.
 
 On retry, replace derived data atomically or stage a generation before switching; never expose partial chunks. Classify network/provider timeouts as retryable; invalid/malformed/no-text as permanent. Use bounded exponential backoff and a maximum attempt count. Keep safe failure code/message, not raw exception. Proposed values are in the configurable defaults section.
 
