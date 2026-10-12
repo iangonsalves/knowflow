@@ -4,9 +4,10 @@ from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.core.config import Settings
-from app.db.models import Document, DocumentStatus
+from app.db.models import Document, DocumentStatus, ProcessingJob, ProcessingJobStatus
 from app.documents.router import get_object_storage
 from app.main import app
 
@@ -142,6 +143,13 @@ def test_owner_uploads_member_reads_and_downloads_then_delete_revokes_access(
     assert document["page_count"] == 1
     assert document["byte_size"] == len(contents)
     assert len(storage.objects) == 1
+    job = db_session.scalar(
+        select(ProcessingJob).where(ProcessingJob.document_id == UUID(document["id"]))
+    )
+    assert job is not None
+    assert job.status == ProcessingJobStatus.QUEUED
+    assert job.attempt_count == 0
+    assert job.max_attempts == 4
     storage_key, stored_size, stored_digest, stored_type = storage.put_calls[0]
     assert storage_key.startswith("documents/") and "leave-policy" not in storage_key
     assert stored_size == len(contents)
@@ -180,6 +188,7 @@ def test_owner_uploads_member_reads_and_downloads_then_delete_revokes_access(
     assert client.get(f"{document_path}/content", headers=OWNER_HEADERS).status_code == 404
     tombstone = db_session.get(Document, UUID(document["id"]))
     assert tombstone is not None
+    assert job.status == ProcessingJobStatus.CANCELLED
     assert tombstone.status == DocumentStatus.DELETING
     assert tombstone.deleted_at is not None
     assert tombstone.cleanup_completed_at is not None

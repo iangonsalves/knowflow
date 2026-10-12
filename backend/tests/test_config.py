@@ -26,6 +26,8 @@ def test_approved_operating_defaults_are_loaded() -> None:
 
     assert settings.max_upload_bytes == 20 * 1024 * 1024
     assert settings.max_pdf_pages == 250
+    assert settings.chunk_size_chars == 1_800
+    assert settings.chunk_overlap_chars == 240
     assert settings.max_question_chars == 2_000
     assert settings.keyword_candidates == 30
     assert settings.vector_candidates == 30
@@ -39,6 +41,11 @@ def test_approved_operating_defaults_are_loaded() -> None:
 def test_invalid_limits_fail_validation() -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, max_upload_bytes=0)
+
+
+def test_chunk_overlap_must_be_smaller_than_chunk_size() -> None:
+    with pytest.raises(ValidationError, match="chunk overlap must be smaller"):
+        Settings(_env_file=None, chunk_size_chars=100, chunk_overlap_chars=100)
 
 
 def test_worker_lease_must_exceed_heartbeat() -> None:

@@ -37,6 +37,8 @@ class Settings(BaseSettings):
 
     max_upload_bytes: int = Field(default=20 * 1024 * 1024, gt=0)
     max_pdf_pages: int = Field(default=250, gt=0)
+    chunk_size_chars: int = Field(default=1_800, gt=0)
+    chunk_overlap_chars: int = Field(default=240, ge=0)
     max_question_chars: int = Field(default=2_000, gt=0)
     keyword_candidates: int = Field(default=30, gt=0)
     vector_candidates: int = Field(default=30, gt=0)
@@ -82,6 +84,8 @@ class Settings(BaseSettings):
             raise ValueError("retry backoff delays must be positive")
         if self.search_page_size > self.max_search_results:
             raise ValueError("search page size cannot exceed max search results")
+        if self.chunk_overlap_chars >= self.chunk_size_chars:
+            raise ValueError("chunk overlap must be smaller than chunk size")
         return self
 
 

@@ -12,6 +12,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
@@ -120,6 +121,15 @@ class DocumentStatus(StrEnum):
     DELETING = "DELETING"
 
 
+class ProcessingJobStatus(StrEnum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    RETRYABLE_FAILURE = "RETRYABLE_FAILURE"
+    PERMANENT_FAILURE = "PERMANENT_FAILURE"
+    SUCCEEDED = "SUCCEEDED"
+    CANCELLED = "CANCELLED"
+
+
 class KnowledgeArea(Base):
     __tablename__ = "knowledge_areas"
     __table_args__ = (
@@ -169,6 +179,10 @@ class Document(Base):
         ),
         CheckConstraint("length(sha256) = 64", name="ck_documents_sha256_length"),
         CheckConstraint(
+            "processing_error_code IS NULL OR length(processing_error_code) > 0",
+            name="ck_documents_processing_error_code",
+        ),
+        CheckConstraint(
             "purge_after IS NULL OR cleanup_completed_at IS NOT NULL",
             name="ck_documents_purge_after_cleanup",
         ),
@@ -207,6 +221,8 @@ class Document(Base):
     cleanup_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cleanup_error_code: Mapped[str | None] = mapped_column(String(64))
     purge_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    processing_error_code: Mapped[str | None] = mapped_column(String(64))
+    processing_error_message: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -215,3 +231,117 @@ class Document(Base):
     )
 
     knowledge_area: Mapped[KnowledgeArea] = relationship(back_populates="documents")
+    processing_job: Mapped["ProcessingJob | None"] = relationship(
+        back_populates="document", uselist=False
+    )
+    pages: Mapped[list["DocumentPage"]] = relationship(back_populates="document")
+    chunks: Mapped[list["DocumentChunk"]] = relationship(back_populates="document")
+
+
+class ProcessingJob(Base):
+    __tablename__ = "processing_jobs"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "document_id", name="uq_job_per_document"),
+        CheckConstraint("attempt_count >= 0", name="ck_jobs_attempt_count_nonnegative"),
+        CheckConstraint("max_attempts > 0", name="ck_jobs_max_attempts_positive"),
+        CheckConstraint(
+            "status IN ('QUEUED', 'RUNNING', 'RETRYABLE_FAILURE', 'PERMANENT_FAILURE', "
+            "'SUCCEEDED', 'CANCELLED')",
+            name="ck_jobs_status",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "document_id"],
+            ["documents.workspace_id", "documents.id"],
+            name="fk_jobs_workspace_document",
+            ondelete="CASCADE",
+        ),
+        Index("ix_jobs_claim", "status", "available_at", "created_at"),
+        Index("ix_jobs_lease", "status", "locked_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    document_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    job_type: Mapped[str] = mapped_column(String(32), nullable=False, default="PROCESS_DOCUMENT")
+    status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default=ProcessingJobStatus.QUEUED.value
+    )
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    locked_by: Mapped[str | None] = mapped_column(String(128))
+    lease_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    last_error_code: Mapped[str | None] = mapped_column(String(64))
+    last_error_message: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    document: Mapped[Document] = relationship(back_populates="processing_job")
+
+
+class DocumentPage(Base):
+    __tablename__ = "document_pages"
+    __table_args__ = (
+        UniqueConstraint("document_id", "page_number", name="uq_pages_document_page"),
+        CheckConstraint("page_number > 0", name="ck_pages_page_number_positive"),
+        ForeignKeyConstraint(
+            ["workspace_id", "document_id"],
+            ["documents.workspace_id", "documents.id"],
+            name="fk_pages_workspace_document",
+            ondelete="CASCADE",
+        ),
+        Index("ix_pages_workspace_document", "workspace_id", "document_id", "page_number"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    document_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    page_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    document: Mapped[Document] = relationship(back_populates="pages")
+
+
+class DocumentChunk(Base):
+    __tablename__ = "document_chunks"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "document_id", "chunk_index", name="uq_chunks_order"),
+        CheckConstraint("chunk_index >= 0", name="ck_chunks_index_nonnegative"),
+        CheckConstraint("page_start > 0", name="ck_chunks_page_start_positive"),
+        CheckConstraint("page_end >= page_start", name="ck_chunks_page_range"),
+        CheckConstraint("token_count IS NULL OR token_count >= 0", name="ck_chunks_token_count"),
+        ForeignKeyConstraint(
+            ["workspace_id", "document_id"],
+            ["documents.workspace_id", "documents.id"],
+            name="fk_chunks_workspace_document",
+            ondelete="CASCADE",
+        ),
+        Index("ix_chunks_workspace_document_order", "workspace_id", "document_id", "chunk_index"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    document_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    page_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    page_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    token_count: Mapped[int | None] = mapped_column(Integer)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    document: Mapped[Document] = relationship(back_populates="chunks")
