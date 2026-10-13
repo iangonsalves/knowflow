@@ -22,12 +22,43 @@ from app.db.models import (
     Workspace,
     WorkspaceMembership,
 )
+from app.embeddings.provider import EmbeddingSet
+from app.search.evidence import select_evidence
 from app.search.schemas import SearchRequest
 from app.search.service import retrieve
 
 RETRIEVAL_EVAL = json.loads(
     (Path(__file__).parent / "fixtures" / "retrieval_eval.json").read_text()
 )
+
+
+class EvaluationProvider(FakeProvider):
+    """Deterministic query vectors so each fixture query ranks its expected row first."""
+
+    def embed(self, texts, *, purpose, progress=None):
+        if purpose != "query":
+            return super().embed(texts, purpose=purpose, progress=progress)
+        query = texts[0].lower()
+        if "remote" in query:
+            vector = [0.9, 0.1] + [0.0] * 382
+        elif "security" in query or "incident" in query:
+            vector = [0.6, 0.4] + [0.0] * 382
+        elif "probation" in query:
+            vector = [0.8, 0.2] + [0.0] * 382
+        elif "carry" in query or "unused" in query:
+            vector = [0.9, 0.1] + [0.0] * 382
+        elif "vacation" in query:
+            vector = [1.0, 0.0] + [0.0] * 382
+        elif "parental" in query:
+            vector = [0.5, 0.5] + [0.0] * 382
+        else:
+            vector = [1.0, 0.0] + [0.0] * 382
+        return EmbeddingSet(
+            "intfloat/e5-small-v2@ffb93f3bd4047442299a41ebb6fa998a38507c52",
+            "v1",
+            self.dimensions,
+            [vector],
+        )
 
 
 def test_postgres_hybrid_search_uses_fts_vector_ready_filter_and_page_provenance() -> None:
@@ -103,7 +134,7 @@ def test_postgres_hybrid_search_uses_fts_vector_ready_filter_and_page_provenance
                     storage_key=f"search/{doc_id}",
                     content_type="application/pdf",
                     byte_size=100,
-                    page_count=3,
+                    page_count=6,
                     sha256="a" * 64,
                     status=DocumentStatus.READY.value,
                 ),
@@ -201,6 +232,57 @@ def test_postgres_hybrid_search_uses_fts_vector_ready_filter_and_page_provenance
                         embedded_at=__import__("datetime").datetime.now(__import__("datetime").UTC),
                     ),
                     DocumentChunk(
+                        workspace_id=workspace_id,
+                        document_id=doc_id,
+                        chunk_index=3,
+                        text=(
+                            "Eligible employees may work remotely for up to two days per week, "
+                            "subject to line-manager approval and business requirements."
+                        ),
+                        page_start=3,
+                        page_end=3,
+                        content_hash="5" * 64,
+                        embedding=[0.7, 0.3] + [0.0] * 382,
+                        embedding_model="intfloat/e5-small-v2@ffb93f3bd4047442299a41ebb6fa998a38507c52",
+                        embedding_version="v1",
+                        embedding_dimensions=384,
+                        embedded_at=__import__("datetime").datetime.now(__import__("datetime").UTC),
+                    ),
+                    DocumentChunk(
+                        workspace_id=workspace_id,
+                        document_id=doc_id,
+                        chunk_index=4,
+                        text=(
+                            "Suspected information-security incidents must be reported to IT "
+                            "Security within one hour of discovery."
+                        ),
+                        page_start=4,
+                        page_end=4,
+                        content_hash="6" * 64,
+                        embedding=[0.6, 0.4] + [0.0] * 382,
+                        embedding_model="intfloat/e5-small-v2@ffb93f3bd4047442299a41ebb6fa998a38507c52",
+                        embedding_version="v1",
+                        embedding_dimensions=384,
+                        embedded_at=__import__("datetime").datetime.now(__import__("datetime").UTC),
+                    ),
+                    DocumentChunk(
+                        workspace_id=workspace_id,
+                        document_id=doc_id,
+                        chunk_index=5,
+                        text=(
+                            "Quick Reference for Testing. Question: How many remote-working "
+                            "days are allowed?"
+                        ),
+                        page_start=6,
+                        page_end=6,
+                        content_hash="7" * 64,
+                        embedding=[1.0] + [0.0] * 383,
+                        embedding_model="intfloat/e5-small-v2@ffb93f3bd4047442299a41ebb6fa998a38507c52",
+                        embedding_version="v1",
+                        embedding_dimensions=384,
+                        embedded_at=__import__("datetime").datetime.now(__import__("datetime").UTC),
+                    ),
+                    DocumentChunk(
                         workspace_id=other_workspace_id,
                         document_id=other_doc_id,
                         chunk_index=0,
@@ -258,14 +340,40 @@ def test_postgres_hybrid_search_uses_fts_vector_ready_filter_and_page_provenance
                 workspace_id=workspace_id,
                 request=SearchRequest(query=RETRIEVAL_EVAL[0]["query"], limit=6),
                 settings=Settings(_env_file=None, app_env="test"),
-                embedding_provider=FakeProvider(),
+                embedding_provider=EvaluationProvider(),
             )
             assert results
-            assert results[0].document_filename == "Annual Leave Policy.pdf"
-            assert "25 working days" in results[0].text
-            assert results[0].page_start == results[0].page_end == 2
-            assert results[0].vector_rank == 1
+            # M5 returns relevance-ranked candidates, not evidence-quality-ranked
+            # answers. Synthetic vectors can tie a reference/question chunk with
+            # the policy passage, so assert retrieval inclusion here; M6's
+            # selection below owns the best-evidence expectation.
+            annual_leave_candidate = next(
+                (
+                    result
+                    for result in results
+                    if result.document_filename == "Annual Leave Policy.pdf"
+                    and "25 working days" in result.text
+                    and result.page_start == result.page_end == 2
+                ),
+                None,
+            )
+            assert annual_leave_candidate is not None
+            assert annual_leave_candidate.vector_rank is not None
+            assert annual_leave_candidate.vector_similarity is not None
+            assert annual_leave_candidate.vector_similarity > Settings(
+                _env_file=None, app_env="test"
+            ).evidence_minimum_vector_similarity
             assert all(result.document_id == doc_id for result in results)
+            selected = select_evidence(
+                results,
+                question=RETRIEVAL_EVAL[0]["query"],
+                workspace_id=str(workspace_id),
+                settings=Settings(_env_file=None, app_env="test"),
+            )
+            assert selected.best is not None
+            assert "25 working days" in selected.best.text
+            assert selected.best.document_id == doc_id
+            assert selected.best.page_start == 2
 
             # Validate the lexical path with an explicit term query separately.
             # The natural-language evaluation query is primarily checking the
@@ -276,7 +384,7 @@ def test_postgres_hybrid_search_uses_fts_vector_ready_filter_and_page_provenance
                 workspace_id=workspace_id,
                 request=SearchRequest(query="employees receive", limit=6),
                 settings=Settings(_env_file=None, app_env="test"),
-                embedding_provider=FakeProvider(),
+                embedding_provider=EvaluationProvider(),
             )
             assert any(
                 item.document_id == doc_id
@@ -291,10 +399,47 @@ def test_postgres_hybrid_search_uses_fts_vector_ready_filter_and_page_provenance
                     workspace_id=workspace_id,
                     request=SearchRequest(query=evaluation["query"], limit=6),
                     settings=Settings(_env_file=None, app_env="test"),
-                    embedding_provider=FakeProvider(),
+                    embedding_provider=EvaluationProvider(),
                 )
                 assert any(evaluation["expected_text"] in item.text for item in evaluated)
                 assert any(item.page_start == evaluation["page"] for item in evaluated)
+                if "remote" in evaluation["query"].lower():
+                    # The fixture deliberately includes a question-like quick
+                    # reference candidate. It may rank highly in M5, but M6
+                    # must prefer the declarative policy passage below.
+                    assert any(
+                        "Question: How many remote-working days are allowed?" in item.text
+                        for item in evaluated
+                    )
+                evidence = select_evidence(
+                    evaluated,
+                    question=evaluation["query"],
+                    workspace_id=str(workspace_id),
+                    settings=Settings(_env_file=None, app_env="test"),
+                )
+                assert evidence.best is not None
+                assert evaluation["expected_text"] in evidence.best.text
+                assert evidence.best.page_start == evaluation["page"]
+
+            unsupported_question = "What is the maternity leave entitlement?"
+            unsupported_results = retrieve(
+                session,
+                workspace_id=workspace_id,
+                request=SearchRequest(query=unsupported_question, limit=6),
+                settings=Settings(_env_file=None, app_env="test"),
+                embedding_provider=EvaluationProvider(),
+            )
+            unsupported = select_evidence(
+                unsupported_results,
+                question=unsupported_question,
+                workspace_id=str(workspace_id),
+                settings=Settings(_env_file=None, app_env="test"),
+            )
+            assert unsupported.state in {"weak_evidence", "no_evidence"}
+            assert unsupported.best is None
+            assert unsupported.supporting == []
+            if unsupported.state == "no_evidence":
+                assert unsupported.related == []
 
             with pytest.raises(HTTPException) as inaccessible_area:
                 retrieve(
@@ -304,7 +449,7 @@ def test_postgres_hybrid_search_uses_fts_vector_ready_filter_and_page_provenance
                         query="annual leave", knowledge_area_id=other_area_id, limit=6
                     ),
                     settings=Settings(_env_file=None, app_env="test"),
-                    embedding_provider=FakeProvider(),
+                    embedding_provider=EvaluationProvider(),
                 )
             assert inaccessible_area.value.status_code == 404
     finally:

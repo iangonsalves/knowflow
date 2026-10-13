@@ -65,7 +65,7 @@ export default async function DocumentsPage({
         {query.error ? <p className="notice notice-error" role="alert">{query.error}</p> : null}
         <nav className="section-nav" aria-label="Workspace sections">
           <Link className="button button-secondary" href={`${workspacePath}/knowledge-areas`}>Knowledge areas</Link>
-          <Link className="button button-secondary" href={`${workspacePath}/search`}>Search</Link>
+          <Link className="button button-secondary" href={`${workspacePath}/search`}>Ask KnowFlow</Link>
           <Link className="button button-secondary" href={workspacePath}>Members &amp; settings</Link>
         </nav>
         {isOwner ? <section className="panel" aria-labelledby="upload-title">

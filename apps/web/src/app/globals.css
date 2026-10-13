@@ -268,6 +268,63 @@ h1 {
   white-space: pre-wrap;
 }
 
+.evidence-card {
+  margin-top: 16px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.evidence-label {
+  margin: 0 0 12px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.evidence-card blockquote {
+  margin: 0;
+  color: var(--ink);
+  font-size: 17px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.evidence-source {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #edf0f4;
+  font-size: 13px;
+}
+
+.evidence-source > span {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.supporting-evidence {
+  margin-top: 28px;
+}
+
+.supporting-evidence h3 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.supporting-evidence .evidence-card {
+  border-left-color: #91aaa5;
+}
+
 .stack-form textarea {
   resize: vertical;
 }
@@ -696,6 +753,11 @@ h1 {
 
   .document-actions {
     flex-wrap: wrap;
+  }
+
+  .evidence-source {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .pdf-frame {

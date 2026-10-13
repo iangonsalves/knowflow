@@ -1,0 +1,2 @@
+# Keep Docker and Linux CI on the CPU-only PyTorch build.
+torch==2.8.0+cpu

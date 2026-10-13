@@ -1,0 +1,26 @@
+[
+  {
+    "query": "How often are administrator permissions reviewed?",
+    "expected_text": "reviews the approved privileged access register at least once every three months",
+    "page": 3,
+    "source_text": "The system owner approves each assignment, and the Security Office reviews the approved privileged access register at least once every three months. Each review confirms the named person, business need, assigned scope, and continued authorization; unjustified access is withdrawn and the review outcome is recorded."
+  },
+  {
+    "query": "How often are backups performed?",
+    "expected_text": "Critical business data is backed up at least daily",
+    "page": 9,
+    "source_text": "Technology Operations defines a backup schedule for each critical service with its owner. Critical business data is backed up at least daily. Backup copies are encrypted in transit and at rest."
+  },
+  {
+    "query": "When should a leaver's system access be removed?",
+    "expected_text": "no later than the employee's effective termination time",
+    "page": 5,
+    "source_text": "System owners remove or revise access based on the person's role and information responsibilities. User credentials must be disabled no later than the employee's effective termination time. For an involuntary separation or an urgent security concern, the manager coordinates a timed access suspension with People Operations and Technology Operations."
+  },
+  {
+    "query": "How quickly must a security incident be reported?",
+    "expected_text": "report it immediately",
+    "page": 8,
+    "source_text": "Anyone who suspects a lost device, exposed credential, misdirected sensitive record, malicious software, unauthorized access, or other security event must report it immediately through the Security Office incident portal or the designated on-call telephone route. If neither route is available, notify the manager and Technology Operations without delay."
+  }
+]

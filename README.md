@@ -4,7 +4,7 @@ KnowFlow is a workspace-based business knowledge platform. Its approved product 
 
 ## Current milestone
 
-M1–M4 are approved. M5 retrieval implementation is being revised to use local `intfloat/e5-small-v2` embeddings and is not approved until local PostgreSQL retrieval is verified. M6 answer generation/RAG has not started. KnowFlow's portfolio constraint requires core AI functionality to run without paid inference APIs; WorkOS authentication remains unchanged.
+M1–M5 are approved. M6 adds evidence-based Q&A using the existing local embedding, PostgreSQL FTS, pgvector and RRF retrieval. It does not generate or paraphrase answers and does not use a generative model. WorkOS authentication remains unchanged.
 
 ## Requirements
 
@@ -55,7 +55,8 @@ The local services are:
 - PostgreSQL with pgvector: `localhost:5432`
 - MinIO console: <http://localhost:9001>
 - Document worker: the `worker` Compose service, using the same backend image/code as the API.
-- Workspace search: `POST /api/v1/workspaces/{id}/search`, available to Owners and Members. Results include source passage, filename, page range, hybrid rank/score and component ranks.
+- Workspace search: `POST /api/v1/workspaces/{id}/search`, available to Owners and Members. It remains the M5 ranked retrieval API.
+- Ask KnowFlow: `POST /api/v1/workspaces/{id}/ask`, available to Owners and Members. Returns best and supporting verbatim evidence, an evidence state and source/page links. It makes no generative AI call.
 
 Uploads create a `PROCESS_DOCUMENT` job in the same PostgreSQL transaction as document metadata. Job states are `QUEUED`, `RUNNING`, `RETRYABLE_FAILURE`, `PERMANENT_FAILURE`, `SUCCEEDED`, and `CANCELLED`; document states are `UPLOADED`, `PROCESSING`, `READY`, `FAILED`, and `DELETING`. The worker extracts text per page, normalizes it, creates deterministic overlapping chunks, generates local embeddings and commits pages, embedded chunks, `READY`, and `SUCCEEDED` atomically. Empty/scanned or malformed PDFs fail without OCR. A deleted document's queued/running work is cancelled and derived rows are removed.
 
@@ -76,15 +77,27 @@ Owners can retry failed documents from the document list. Job attempts use the c
 
 Chunking is configurable with `KNOWFLOW_CHUNK_SIZE_CHARS` (default 1800) and `KNOWFLOW_CHUNK_OVERLAP_CHARS` (default 240). The embedding runtime uses `KNOWFLOW_EMBEDDING_MODEL=intfloat/e5-small-v2`, pinned revision `ffb93f3bd4047442299a41ebb6fa998a38507c52`, 384 dimensions, `KNOWFLOW_EMBEDDING_VERSION=v1`, CPU device, cache path `/models`, and batch size 16. E5 uses `passage: ` prefixes for stored chunks and `query: ` prefixes for searches. Model files are cached by the `model_cache` Compose volume, shared by API and worker. No provider/API key configuration exists. The model supports up to 512 tokens per input; longer inputs are truncated.
 
+The backend pins PyTorch to 2.8.0. Docker and Linux CI install the matching `2.8.0+cpu` wheel from PyTorch's CPU-only wheel index before the other Python dependencies, so ARM64 and x86_64 Linux environments do not resolve the default CUDA-enabled PyPI build. Native macOS installs use the same pinned PyTorch version, while KnowFlow explicitly runs inference on CPU. The Docker dependency layer is based on `pyproject.toml` and `constraints-linux-cpu.txt`, and is built before application source is copied, so changing Python code does not reinstall dependencies.
+
+For a native Linux Python environment, use the same CPU wheel first, then apply the committed constraint:
+
+```bash
+cd backend
+python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.8.0+cpu"
+python -m pip install -e ".[dev]" --constraint constraints-linux-cpu.txt
+```
+
+On macOS, install the project normally from `backend` with `python -m pip install -e ".[dev]"`; the app's configured inference device remains CPU.
+
 Semantic retrieval uses pgvector cosine distance with exact scans for the small current corpus. PostgreSQL FTS uses `websearch_to_tsquery('english', ...)`, `ts_rank_cd`, and a GIN index over `to_tsvector('english', text)`. Independent top-30 lists are combined with RRF (`KNOWFLOW_RRF_K=60`) and capped at `KNOWFLOW_RETRIEVAL_TOP_K=6`; candidate limits are configurable. Results include document/chunk IDs and page ranges and only include active READY documents with vectors matching the configured model/version. Search is workspace membership protected in FastAPI. An inaccessible knowledge-area ID returns 404.
 
 The M5 migration requeues active READY/PROCESSING documents through their existing processing jobs and sets them to UPLOADED, fencing any prior in-flight lease. The worker must finish embedding before they become READY/searchable again. Failed documents can be retried by an Owner. Changing the model/dimension/version requires an explicit re-embedding rollout; dimensions are pinned by migration and settings validation.
 
-The model is pretrained open-source software running locally; KnowFlow does not train a model. Document text and search queries are embedded inside the API/worker containers and are not sent to an AI inference service. Search uses no paid AI API. Future M6 Q&A must follow the zero-charge constraint and be designed around local inference unless the project owner explicitly approves a paid provider.
+The model is pretrained open-source software running locally; KnowFlow does not train a model. Document text and search queries are embedded inside the API/worker containers and are not sent to an AI inference service. Search and Ask KnowFlow use no paid AI API, no generative model, and no LLM. Ask KnowFlow selects and presents source passages; it never claims to synthesize a factual answer.
 
-For a manual retrieval check, upload `docs/samples/KnowFlow_Sample_HR_Policies.pdf` to a workspace knowledge area, wait until the document status is **Ready** (`docker compose logs -f worker`), then search **“How much annual leave do employees receive?”**. The expected top passage states that full-time employees receive **25 working days** and identifies **page 2** of the sample PDF. If the sample document was already READY before M5, the M5 migration requeues it and the worker must re-embed it before it becomes searchable.
+M6 uses hidden/internal PostgreSQL FTS rank and pgvector cosine similarity in addition to source-text structure and answer-type evidence. `KNOWFLOW_EVIDENCE_MINIMUM_VECTOR_SIMILARITY=0.72` is a starting cosine threshold, not a confidence score. Strong evidence needs either lexical FTS support with meaningful query overlap or a sufficiently similar vector candidate plus a matching answer type such as frequency, quantity, timing, or responsible role. Evidence-quality logic has no business-domain synonym dictionary and does not treat vector rank #1 or RRF score as proof. Results from different documents remain separate, with their own page provenance; KnowFlow does not reconcile policy differences. This deterministic approach can still be uncertain for ambiguous questions and is not a general language-understanding guarantee.
 
-Also test **“How much vacation time do staff get?”** to exercise semantic retrieval beyond exact terms. M5 is verified only after both queries return the annual leave passage, filename and page 2 provenance without any AI API credentials.
+For a manual retrieval/evidence check, upload both `docs/samples/KnowFlow_Sample_HR_Policies.pdf` and `docs/samples/KnowFlow_Sample_Information_Security_Policy.pdf` to the same workspace and wait until both show **Ready** (`docker compose logs -f worker`). Try **“How much annual leave do employees receive?”**, **“How much vacation time do staff get?”**, **“How many days can employees work remotely?”**, **“When must a security incident be reported?”**, **“What is the maternity leave entitlement?”**, **“How often are administrator permissions reviewed?”**, **“How often are backups performed?”**, **“When should a leaver's system access be removed?”**, **“How quickly must a security incident be reported?”**, and **“How much is the employee BYOD allowance?”**. The annual-leave and vacation questions should surface 25 working days; remote work should prefer the policy over question/reference text; unsupported maternity/BYOD questions must not promote related passages to best evidence. Security-policy evidence should preserve the cited source and page, including its daily backup, quarterly access review, departure deadline, or incident timing. When documents give different reporting timelines, KnowFlow should show their source passages separately without synthesizing a single rule. No AI API credential is needed.
 
 M3 upload validation accepts PDFs with a valid structure, no password protection, up to 20 MiB and 250 pages. A deleted document immediately returns 404 to application requests. Storage cleanup is retried on an Owner delete request for up to 24 hours; after successful cleanup, the metadata tombstone remains for 7 days and is then purged during subsequent document/area operations.
 

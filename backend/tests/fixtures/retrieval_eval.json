@@ -13,5 +13,20 @@
     "query": "How long is the standard probation period?",
     "expected_text": "probation period is six months",
     "page": 3
+  },
+  {
+    "query": "How much vacation time do staff get?",
+    "expected_text": "25 working days",
+    "page": 2
+  },
+  {
+    "query": "How many days can employees work remotely?",
+    "expected_text": "up to two days per week",
+    "page": 3
+  },
+  {
+    "query": "When must a security incident be reported?",
+    "expected_text": "within one hour of discovery",
+    "page": 4
   }
 ]

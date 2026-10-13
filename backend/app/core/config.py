@@ -52,7 +52,6 @@ class Settings(BaseSettings):
     vector_candidates: int = Field(default=30, gt=0)
     retrieval_top_k: int = Field(default=6, gt=0)
     rrf_k: int = Field(default=60, gt=0)
-    max_context_tokens: int = Field(default=6_000, gt=0)
 
     processing_job_timeout_seconds: int = Field(default=600, gt=0)
     worker_max_attempts: int = Field(default=4, ge=1)
@@ -70,6 +69,11 @@ class Settings(BaseSettings):
     rate_limit_auth_window_seconds: int = Field(default=300, gt=0)
     max_search_results: int = Field(default=20, gt=0)
     search_page_size: int = Field(default=10, gt=0)
+    evidence_supporting_limit: int = Field(default=3, ge=0, le=5)
+    evidence_dedup_jaccard_threshold: float = Field(default=0.72, gt=0.5, le=1.0)
+    evidence_minimum_query_term_overlap: int = Field(default=2, ge=1, le=10)
+    evidence_minimum_query_coverage: float = Field(default=0.6, gt=0, le=1.0)
+    evidence_minimum_vector_similarity: float = Field(default=0.72, ge=-1.0, le=1.0)
 
     auth_access_token_seconds: int = Field(default=900, gt=0)
     app_session_max_age_seconds: int = Field(default=7 * 24 * 60 * 60, gt=0)
