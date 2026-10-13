@@ -4,6 +4,8 @@
 
 **M6 amendment (13 October 2026):** V1 Q&A is evidence-based and non-generative. It returns selected verbatim source passages from M5 hybrid retrieval. No generative model or LLM inference is part of V1. See [ADR 0011](adr/0011-evidence-based-qa-without-generative-llm.md).
 
+**M7 implementation note (13 October 2026):** The authenticated frontend now uses a shared workspace shell, overview, and separate Members page, with responsive navigation and explicit UI states. Safe server-side errors preserve inaccessible-resource 404 behavior and provide a generic retry state for service failures. This is a presentation-layer change only: backend authorization remains authoritative, and M1–M6 storage, job, retrieval, and evidence behavior is unchanged. No schema migration or new service was introduced.
+
 This document translates the approved KnowFlow Project Blueprint into the detailed V1 specification. The blueprint governs scope. Implementation proceeds only in owner-approved milestones. Decisions marked **Locked** come from the owner or approved blueprint; **Recommendation** identifies a preferred option; **Open decision** lists alternatives that need approval before the relevant milestone.
 
 ## 1. Product specification and acceptance criteria
@@ -52,6 +54,8 @@ KnowFlow enables an organization to organize text-based PDF knowledge by workspa
 
 ## 2. User journeys and screen flows
 
+The implemented M7 workspace shell provides persistent Overview, Ask KnowFlow, Knowledge areas, Documents, and Members navigation. All links remain within the selected KnowFlow workspace; a workspace switch returns to the membership-filtered workspace selector. The Members section is readable to Members, while management controls are Owner-only and remain enforced by FastAPI. The overview derives small counts from existing APIs and adds no analytics subsystem.
+
 ### Owner setup
 
 ```text
@@ -60,7 +64,7 @@ Register/sign in -> workspace selector -> create workspace (Owner)
  -> upload PDF -> UPLOADED -> PROCESSING -> READY or FAILED
 ```
 
-Screens: authentication; workspace selector/empty state; create workspace; dashboard with knowledge areas, recent documents and Ask/Search entry; knowledge-area list and create/rename/delete; member list and add by registered account identifier; upload flow with area, PDF validation, progress and completion; document detail with metadata, status, safe error and retry for Owner. Deletion of a non-empty area is rejected.
+Screens: authentication; workspace selector/empty state; create workspace; overview with area/document/status counts, recent documents and Ask entry; knowledge-area list and create/rename/delete; member list and add by registered account email; upload flow with area, PDF validation, pending state and completion; document detail with metadata, status, safe error and retry for Owner. Destructive actions require a visible confirmation. Deletion of a non-empty area is rejected.
 
 ### Member question journey
 
@@ -410,7 +414,7 @@ These gates start only after owner approval of this design.
 | M4 Durable worker | DB jobs, claim/lease/recovery/retry, extraction/pages/chunks | Concurrent claims, crash recovery, retry/idempotency, fixtures | Durable across API restart; no duplicate derived data; accurate READY/FAILED. |
 | M5 Embeddings/retrieval | Provider adapter, vectors, keyword/vector search and fusion | Fixed evaluation set, mocked provider, tenant filters | E-01..E-10 behavior recorded; results authorized and READY-only. |
 | M6 Evidence Q&A | Evidence selection, deterministic passage presentation, provenance and source navigation; no generative model | HR acceptance queries, overlap/dedup, weak/no-evidence, tenant and source access tests | Shows verbatim authorized evidence or reports no strong/any match; no generative inference or history. |
-| M7 UI/hardening | Main screens, role controls, states, rate limits, logs | E2E owner/member journey and security regressions | Upload-to-ready and ask-to-source flows work in deployed-like setup. |
+| M7 UI/hardening | Shared application shell, workspace overview/navigation, polished area/document/Ask/member experiences, responsive/accessibility/error/destructive states, focused security review | Frontend helper tests, full backend suite, lint/type/build, PostgreSQL tests where available, migrations drift check, Compose and diff checks | Owner and Member flows remain role-safe; upload-to-ready and ask-to-source paths remain authorized; clear states and responsive layout work; no M5/M6 behavior or schema is changed. |
 | M8 Release | Public portfolio demo, container build/deployment, secrets, object store, managed DB/runtime, health/backups | Deploy smoke, migration/rollback rehearsal, full journey | A publicly accessible live demo can be linked from portfolio, GitHub and CV; prefer suitable free tiers where practical, avoid unnecessary recurring costs, document recovery; no V2 features included. Evaluate services at M8 without redesigning V1 around one provider now. |
 
 At every milestone, update docs, preserve green tests, review migration impact and show acceptance path before advancing. Changes that expand blueprint scope require discussion first.

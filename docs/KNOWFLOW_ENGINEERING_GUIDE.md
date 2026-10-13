@@ -1,6 +1,6 @@
 # KnowFlow Engineering Guide
 
-**Codebase coverage:** M1 Foundation through M6 Evidence-Based Q&A
+**Codebase coverage:** M1 Foundation through M7 UI, UX & Application Hardening
 **Purpose:** understand the implementation well enough to navigate, debug, and explain it.
 **Scope boundary:** M6 presents verbatim evidence returned by M5 retrieval. V1 has no generative LLM, generated answer, or persisted conversation.
 
@@ -87,9 +87,18 @@ knowflow/
 | `apps/web/src/proxy.ts` | Runs `authkitProxy()` on the configured routes. Its matcher covers the root, auth routes, workspace pages, and document content route. |
 | `apps/web/src/lib/api.ts` | `apiFetch` obtains the server-side AuthKit user/token, adds the bearer header, calls `API_INTERNAL_BASE_URL`, and disables caching. |
 | `apps/web/src/app/actions.ts` | Server actions submit workspace, membership, area, upload, retry, deletion, and sign-out operations. `authorizedFetch` forwards the bearer token. |
-| `apps/web/src/app/workspaces/...` | Server components fetch scoped data and render workspace, membership, area, document list, and document detail screens. |
+| `apps/web/src/app/error.tsx` | Generic, retryable application error page that does not render exception messages or internals. |
+| `apps/web/src/app/workspaces/[workspaceId]/layout.tsx` | Fetches the authorized workspace on the server and renders the shared shell around all workspace routes. A missing/inaccessible workspace becomes a 404. |
+| `apps/web/src/app/workspaces/[workspaceId]/WorkspaceNavigation.tsx` | Client-only active-link state using `usePathname`; the links retain the selected workspace. It receives no API token. |
+| `apps/web/src/app/workspaces/[workspaceId]/page.tsx` | Lightweight overview using existing area, document, and Owner member endpoints. It adds no analytics backend. |
+| `apps/web/src/app/workspaces/[workspaceId]/members/page.tsx` | Member list for workspace users and Owner-only add/change/remove controls. Server actions and FastAPI still enforce permissions. |
+| `apps/web/src/app/workspaces/...` | Server components fetch scoped data and render knowledge-area, document list/detail, and Ask screens inside the shared shell. |
+| `apps/web/src/app/components/ConfirmSubmit.tsx` | Inline, keyboard-operable confirmation before destructive membership, area, or document actions. |
+| `apps/web/src/app/components/PendingSubmitButton.tsx` | Uses React form status to prevent repeated submissions and show a pending label. |
+| `apps/web/src/lib/ui-helpers.mjs` | UI-only Owner/Member capabilities, readable status labels, and safe Ask error text; unit tested with Node's built-in runner. |
+| `apps/web/src/lib/require-api-success.ts` | Preserves 404/not-found semantics and sends other failed API responses to the safe app error boundary. |
 | `apps/web/src/app/api/workspaces/[workspaceId]/documents/[documentId]/content/route.ts` | Authenticated Next.js streaming proxy for inline PDF display and download. |
-| `apps/web/src/app/api/workspaces/[workspaceId]/ask/route.ts` | Authenticated BFF proxy for the evidence-oriented Ask endpoint. |
+| `apps/web/src/app/api/workspaces/[workspaceId]/ask/route.ts` | Authenticated BFF proxy for evidence-oriented Ask; upstream network failures return a safe 503 message. |
 
 ### Backend paths
 
@@ -511,7 +520,7 @@ Read these in priority order rather than trying to memorize every file.
 
 ## 20. What to learn next
 
-### Must understand before M6
+### Must understand before M8
 
 - Read `models.py` and draw the tenant/ownership relations from memory.
 - Trace one authenticated route through `get_current_user`, `require_workspace_access`, router, service, and SQL query.
@@ -546,7 +555,7 @@ Read these in priority order rather than trying to memorize every file.
 - PostgreSQL RLS, Redis/Celery, OCR, persisted conversations, document version comparison, and deployment are not implemented through M6.
 - Deletion tombstone purge runs opportunistically during document/area operations after successful storage cleanup and retention; there is not a dedicated scheduled cleanup process.
 
-These differences preserve the approved M1–M6 scope. Ask KnowFlow returns selected evidence rather than a generated answer.
+These differences preserve the approved M1–M7 scope. Ask KnowFlow returns selected evidence rather than a generated answer.
 
 ## M5 addendum: embeddings and hybrid retrieval
 
@@ -575,6 +584,20 @@ Source paths are constructed from authorized retrieval rows and stored page prov
 The [SearchForm component](../apps/web/src/app/workspaces/%5BworkspaceId%5D/search/SearchForm.tsx) renders Ask KnowFlow, best matching evidence, supporting passages, and source/page metadata. It intentionally omits engineering ranks and scores. The authenticated BFF is the [Ask route](../apps/web/src/app/api/workspaces/%5BworkspaceId%5D/ask/route.ts). M5 `/search` remains available for retrieval diagnostics.
 
 The evidence tests cover sentence selection, verbatim preservation, deduplication, HR cases, and blind generalization cases drawn from the information-security sample. Search tests cover Owner/Member access, tenant denial, input validation and provider failure. The PostgreSQL integration test checks M5 candidate ranks, internal cosine similarity, FTS/pgvector filtering, and HR page provenance when run against a configured database. No application path invokes a generative model.
+
+## M7 addendum: user-facing application shell and hardening
+
+The workspace route group now wraps pages in `apps/web/src/app/workspaces/[workspaceId]/layout.tsx`. It fetches the workspace through server-only `apiFetch`, renders the shared top bar and navigation, and returns a 404 for an inaccessible workspace. `WorkspaceNavigation.tsx` highlights the current route and preserves workspace context. Desktop uses a narrow left sidebar; tablet/mobile uses a horizontally scrollable navigation row. The workspace switch link returns to the server-rendered `/workspaces` selection.
+
+The workspace root is an overview, not an analytics system. It counts areas/documents and their existing lifecycle statuses from current endpoints, and loads membership count only for Owners. `/members` separates role management from the overview. `getWorkspaceCapabilities()` in `apps/web/src/lib/ui-helpers.mjs` hides Owner-only controls in the UI, but API services continue to be the real authorization boundary. Members can read the member list and use documents; they cannot manage areas, documents, or membership.
+
+M7 retains Ask's established meaning and response schema. The question form is a one-shot evidence query, not a chat. It has accessible labels, disabled/working submit states, a character count, an empty-workspace notice, safe status-based failure messages, and readable evidence/source cards. Weak evidence remains visually subordinate and labeled potentially related; no evidence remains explicit. The UI does not display internal scores. Evidence `source_path` still opens the protected document detail page; the PDF content route and FastAPI membership/document checks are unchanged.
+
+Document forms show PDF/text/size/page constraints. `PendingSubmitButton` prevents repeat submissions and announces pending text. Processing documents state that they become searchable when Ready and offer a full-page status refresh without polling. `ConfirmSubmit` requires a visible second action before destructive or consequential membership changes. File names are rendered as React text and CSS allows wrapping; no storage key or object-store URL is exposed. The existing API maps FastAPI internal exceptions and request validation to safe envelopes. Server-side `apiFetch` and `authorizedFetch` return generic 503 envelopes on network failures, the Ask proxy does the same, and `requireApiSuccess` distinguishes inaccessible-resource 404s from temporary service errors without showing response internals. The app error boundary offers retry and a route back to workspace selection.
+
+Practical accessibility work includes semantic nav/main regions, active-page state, explicit labels, focus-visible outlines, textual status labels (not color alone), role/status messaging, and reduced-motion handling. Responsive styles cover the workspace navigation, evidence, member rows, upload form, and PDF viewer. These changes are accessibility-minded, not a formal conformance certification.
+
+The frontend now has a dependency-free test command: `cd apps/web && npm test`. `tests/ui-helpers.test.mjs` covers Owner/Member UI capabilities, readable document lifecycle labels, and safe Ask errors. There was no existing browser/DOM test stack, so the suite does not simulate full browser journeys; role and tenant security continue to be covered by backend tests. Useful frontend checks are `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build`.
 
 ### KnowFlow Portfolio Zero-Charge Constraint
 

@@ -15,11 +15,18 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     headers.set("Content-Type", "application/json");
   }
 
-  return fetch(`${apiBaseUrl}/api/v1${path}`, {
-    ...init,
-    headers,
-    cache: "no-store",
-  });
+  try {
+    return await fetch(`${apiBaseUrl}/api/v1${path}`, {
+      ...init,
+      headers,
+      cache: "no-store",
+    });
+  } catch {
+    return Response.json(
+      { error: { code: "service_unavailable", message: "KnowFlow is temporarily unavailable. Try again shortly." } },
+      { status: 503 },
+    );
+  }
 }
 
 export async function responseMessage(response: Response): Promise<string> {

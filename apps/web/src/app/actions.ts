@@ -15,7 +15,14 @@ async function authorizedFetch(path: string, init: RequestInit): Promise<Respons
   if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  return fetch(`${apiBaseUrl}/api/v1${path}`, { ...init, headers, cache: "no-store" });
+  try {
+    return await fetch(`${apiBaseUrl}/api/v1${path}`, { ...init, headers, cache: "no-store" });
+  } catch {
+    return Response.json(
+      { error: { code: "service_unavailable", message: "KnowFlow is temporarily unavailable. Try again shortly." } },
+      { status: 503 },
+    );
+  }
 }
 
 function redirectWithError(path: string, message: string): never {
@@ -36,7 +43,7 @@ export async function createWorkspace(formData: FormData): Promise<void> {
 export async function addMember(formData: FormData): Promise<void> {
   const workspaceId = String(formData.get("workspace_id") ?? "");
   const email = String(formData.get("email") ?? "").trim();
-  const path = `/workspaces/${encodeURIComponent(workspaceId)}`;
+  const path = `/workspaces/${encodeURIComponent(workspaceId)}/members`;
   const response = await authorizedFetch(`${path}/members`, {
     method: "POST",
     body: JSON.stringify({ email }),
@@ -49,7 +56,7 @@ export async function changeMemberRole(formData: FormData): Promise<void> {
   const workspaceId = String(formData.get("workspace_id") ?? "");
   const userId = String(formData.get("user_id") ?? "");
   const role = String(formData.get("role") ?? "MEMBER");
-  const path = `/workspaces/${encodeURIComponent(workspaceId)}`;
+  const path = `/workspaces/${encodeURIComponent(workspaceId)}/members`;
   const response = await authorizedFetch(
     `/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`,
     { method: "PATCH", body: JSON.stringify({ role }) },
@@ -61,7 +68,7 @@ export async function changeMemberRole(formData: FormData): Promise<void> {
 export async function removeMember(formData: FormData): Promise<void> {
   const workspaceId = String(formData.get("workspace_id") ?? "");
   const userId = String(formData.get("user_id") ?? "");
-  const path = `/workspaces/${encodeURIComponent(workspaceId)}`;
+  const path = `/workspaces/${encodeURIComponent(workspaceId)}/members`;
   const response = await authorizedFetch(
     `/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`,
     { method: "DELETE" },

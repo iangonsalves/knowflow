@@ -1,94 +1,66 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
-
-import { addMember, changeMemberRole, removeMember, signOutAction } from "@/app/actions";
 import { apiFetch } from "@/lib/api";
+import { getWorkspaceCapabilities, getDocumentStatusLabel } from "@/lib/ui-helpers.mjs";
+import { requireApiSuccess } from "@/lib/require-api-success";
 
-type Workspace = {
-  id: string;
-  name: string;
-  slug: string;
-  role: "OWNER" | "MEMBER";
-};
+type Workspace = { id: string; name: string; role: "OWNER" | "MEMBER" };
+type Area = { id: string; name: string; document_count: number };
+type Document = { id: string; original_filename: string; status: string; created_at: string };
+type Member = { user_id: string };
 
-type Member = {
-  user_id: string;
-  email: string;
-  display_name: string | null;
-  role: "OWNER" | "MEMBER";
-  created_at: string;
-};
-
-export default async function WorkspacePage({
-  params,
-  searchParams,
-}: {
-  params: Promise<{ workspaceId: string }>;
-  searchParams: Promise<{ error?: string }>;
-}) {
-  const [{ workspaceId }, { error }] = await Promise.all([params, searchParams]);
-  const workspaceResponse = await apiFetch(`/workspaces/${encodeURIComponent(workspaceId)}`);
-  if (workspaceResponse.status === 404) notFound();
-  if (!workspaceResponse.ok) notFound();
+export default async function WorkspacePage({ params }: { params: Promise<{ workspaceId: string }> }) {
+  const { workspaceId } = await params;
+  const base = `/workspaces/${encodeURIComponent(workspaceId)}`;
+  const [workspaceResponse, areasResponse, documentsResponse] = await Promise.all([
+    apiFetch(base), apiFetch(`${base}/knowledge-areas`), apiFetch(`${base}/documents`),
+  ]);
+  requireApiSuccess(workspaceResponse);
+  requireApiSuccess(areasResponse);
+  requireApiSuccess(documentsResponse);
   const workspace = (await workspaceResponse.json()) as Workspace;
-  const membersResponse = await apiFetch(`/workspaces/${encodeURIComponent(workspaceId)}/members`);
-  const members = membersResponse.ok ? ((await membersResponse.json()) as Member[]) : [];
-  const isOwner = workspace.role === "OWNER";
+  const areas = (await areasResponse.json()) as Area[];
+  const documents = (await documentsResponse.json()) as Document[];
+  const readyCount = documents.filter((document) => document.status === "READY").length;
+  const processingCount = documents.filter((document) => ["UPLOADED", "PROCESSING"].includes(document.status)).length;
+  const failedCount = documents.filter((document) => document.status === "FAILED").length;
+  const { canManageMembers: isOwner } = getWorkspaceCapabilities(workspace.role);
+  const memberResponse = isOwner ? await apiFetch(`${base}/members`) : null;
+  if (memberResponse) requireApiSuccess(memberResponse);
+  const members = memberResponse ? ((await memberResponse.json()) as Member[]) : null;
 
   return (
-    <main className="app-shell">
-      <header className="topbar">
-        <Link className="brand" href="/workspaces">KnowFlow</Link>
-        <div className="user-menu"><span>{isOwner ? "Owner" : "Member"}</span><form action={signOutAction}><button className="button button-quiet" type="submit">Sign out</button></form></div>
-      </header>
-      <div className="content-wrap">
-        <Link className="back-link" href="/workspaces">← All workspaces</Link>
-        <p className="eyebrow">Workspace</p>
-        <div className="title-row"><h1 className="page-title">{workspace.name}</h1><span className={`role-pill ${isOwner ? "role-owner" : ""}`}>{isOwner ? "Owner" : "Member"}</span></div>
-        <p className="page-intro">Organize internal documents into knowledge areas and manage workspace access.</p>
-        <nav className="section-nav" aria-label="Workspace sections">
-          <Link className="button button-secondary" href={`/workspaces/${workspaceId}/knowledge-areas`}>Knowledge areas</Link>
-          <Link className="button button-secondary" href={`/workspaces/${workspaceId}/documents`}>Documents</Link>
-          <Link className="button button-secondary" href={`/workspaces/${workspaceId}/search`}>Ask KnowFlow</Link>
-        </nav>
-        {error ? <p className="notice notice-error" role="alert">{error}</p> : null}
-        <section className="panel" aria-labelledby="members-title">
-          <div className="panel-heading"><div><h2 id="members-title">Members</h2><p>Membership is scoped to this workspace.</p></div></div>
-          <ul className="member-list">
-            {members.map((member) => (
-              <li key={member.user_id}>
-                <div className="member-info"><span className="workspace-name">{member.display_name || member.email}</span><span className="workspace-meta">{member.display_name ? member.email : ""}</span></div>
-                <span className="role-pill">{member.role === "OWNER" ? "Owner" : "Member"}</span>
-                {isOwner ? (
-                  <div className="member-actions">
-                    <form action={changeMemberRole}>
-                      <input type="hidden" name="workspace_id" value={workspaceId} />
-                      <input type="hidden" name="user_id" value={member.user_id} />
-                      <input type="hidden" name="role" value={member.role === "OWNER" ? "MEMBER" : "OWNER"} />
-                      <button className="text-button" type="submit">{member.role === "OWNER" ? "Make Member" : "Make Owner"}</button>
-                    </form>
-                    <form action={removeMember}>
-                      <input type="hidden" name="workspace_id" value={workspaceId} />
-                      <input type="hidden" name="user_id" value={member.user_id} />
-                      <button className="text-button text-danger" type="submit">Remove</button>
-                    </form>
-                  </div>
-                ) : null}
-              </li>
+    <div className="page-content">
+      <p className="eyebrow">Workspace overview</p>
+      <div className="dashboard-heading">
+        <div><h1 className="page-title">{workspace.name}</h1><p className="page-intro">Your team’s documents, organized and ready to explore.</p></div>
+        <Link className="button button-primary" href={`${base}/search`}>Ask KnowFlow</Link>
+      </div>
+
+      <section className="metric-grid" aria-label="Workspace summary">
+        <article className="metric-card"><span>Knowledge areas</span><strong>{areas.length}</strong><Link href={`${base}/knowledge-areas`}>Browse areas</Link></article>
+        <article className="metric-card"><span>Documents</span><strong>{documents.length}</strong><Link href={`${base}/documents`}>View library</Link></article>
+        <article className="metric-card"><span>Ready to search</span><strong>{readyCount}</strong><span className="metric-note">{processingCount} processing · {failedCount} failed</span></article>
+        {members ? <article className="metric-card"><span>Workspace members</span><strong>{members.length}</strong><Link href={`${base}/members`}>Manage members</Link></article> : null}
+      </section>
+
+      {documents.length === 0 ? (
+        <section className="empty-panel">
+          <p className="eyebrow">Build your knowledge base</p>
+          <h2>Start with a Knowledge Area</h2>
+          <p>Use areas to organize policies and procedures, then upload a selectable-text PDF.</p>
+          {isOwner ? <Link className="button button-primary" href={`${base}/knowledge-areas`}>Create a Knowledge Area</Link> : <Link className="button button-secondary" href={`${base}/knowledge-areas`}>Browse Knowledge Areas</Link>}
+        </section>
+      ) : (
+        <section className="panel" aria-labelledby="recent-documents-title">
+          <div className="panel-heading"><div><h2 id="recent-documents-title">Recently added</h2><p>Documents in this workspace knowledge base.</p></div><Link className="text-button" href={`${base}/documents`}>View all</Link></div>
+          <ul className="recent-document-list">
+            {documents.slice(0, 5).map((document) => (
+              <li key={document.id}><span className="document-icon" aria-hidden="true">PDF</span><Link href={`${base}/documents/${document.id}`} className="document-title">{document.original_filename}</Link><span className={`status-pill status-${document.status.toLowerCase()}`}>{getDocumentStatusLabel(document.status)}</span></li>
             ))}
           </ul>
-          {isOwner ? (
-            <form action={addMember} className="form-row add-member-form">
-              <input type="hidden" name="workspace_id" value={workspaceId} />
-              <label className="field-label" htmlFor="member-email">Add an existing verified account</label>
-              <div className="input-row">
-                <input id="member-email" name="email" type="email" maxLength={320} required placeholder="colleague@example.com" />
-                <button className="button button-primary" type="submit">Add Member</button>
-              </div>
-            </form>
-          ) : <p className="member-note">Only an Owner can manage workspace membership.</p>}
+          {readyCount === 0 ? <p className="notice notice-neutral">Ask KnowFlow becomes available when at least one document is Ready.</p> : null}
         </section>
-      </div>
-    </main>
+      )}
+    </div>
   );
 }

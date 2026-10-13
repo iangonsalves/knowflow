@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { createWorkspace, signOutAction } from "@/app/actions";
+import PendingSubmitButton from "@/app/components/PendingSubmitButton";
 import { apiFetch } from "@/lib/api";
 
 type Workspace = {
@@ -68,7 +69,7 @@ export default async function WorkspacesPage({
             <label className="field-label" htmlFor="workspace-name">Workspace name</label>
             <div className="input-row">
               <input id="workspace-name" name="name" minLength={1} maxLength={120} required placeholder="Acme Technologies" />
-              <button className="button button-primary" type="submit">Create workspace</button>
+              <PendingSubmitButton label="Create workspace" pendingLabel="Creating…" />
             </div>
           </form>
         </section>
