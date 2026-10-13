@@ -49,6 +49,7 @@ export default async function WorkspacePage({
         <nav className="section-nav" aria-label="Workspace sections">
           <Link className="button button-secondary" href={`/workspaces/${workspaceId}/knowledge-areas`}>Knowledge areas</Link>
           <Link className="button button-secondary" href={`/workspaces/${workspaceId}/documents`}>Documents</Link>
+          <Link className="button button-secondary" href={`/workspaces/${workspaceId}/search`}>Search</Link>
         </nav>
         {error ? <p className="notice notice-error" role="alert">{error}</p> : null}
         <section className="panel" aria-labelledby="members-title">

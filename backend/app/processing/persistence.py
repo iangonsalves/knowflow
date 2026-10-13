@@ -1,5 +1,6 @@
 """Atomic replacement of page text/chunks and document/job readiness."""
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -19,11 +20,20 @@ from app.processing.chunking import PreparedChunk
 from app.processing.extraction import ExtractedPage, LeaseLost
 
 
+@dataclass(frozen=True)
+class EmbeddedChunk:
+    chunk: PreparedChunk
+    vector: list[float]
+    model: str
+    version: str
+    dimensions: int
+
+
 def persist_processed_output(
     session_factory: sessionmaker[Session],
     claim: ClaimedJob,
     pages: list[ExtractedPage],
-    chunks: list[PreparedChunk],
+    chunks: list[EmbeddedChunk],
 ) -> bool:
     """Persist all derived output and READY/SUCCEEDED in one transaction."""
     with session_factory() as session, session.begin():
@@ -87,11 +97,16 @@ def persist_processed_output(
                     id=uuid4(),
                     workspace_id=claim.workspace_id,
                     document_id=claim.document_id,
-                    chunk_index=chunk.chunk_index,
-                    text=chunk.text,
-                    page_start=chunk.page_start,
-                    page_end=chunk.page_end,
-                    content_hash=chunk.content_hash,
+                    chunk_index=chunk.chunk.chunk_index,
+                    text=chunk.chunk.text,
+                    page_start=chunk.chunk.page_start,
+                    page_end=chunk.chunk.page_end,
+                    content_hash=chunk.chunk.content_hash,
+                    embedding=chunk.vector,
+                    embedding_model=chunk.model,
+                    embedding_version=chunk.version,
+                    embedding_dimensions=chunk.dimensions,
+                    embedded_at=datetime.now(UTC),
                 )
                 for chunk in chunks
             ]

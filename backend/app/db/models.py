@@ -4,6 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    literal_column,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import Uuid
@@ -322,6 +324,14 @@ class DocumentChunk(Base):
         CheckConstraint("page_start > 0", name="ck_chunks_page_start_positive"),
         CheckConstraint("page_end >= page_start", name="ck_chunks_page_range"),
         CheckConstraint("token_count IS NULL OR token_count >= 0", name="ck_chunks_token_count"),
+        CheckConstraint(
+            "(embedding IS NULL AND embedding_model IS NULL AND embedding_version IS NULL "
+            "AND embedding_dimensions IS NULL AND embedded_at IS NULL) OR "
+            "(embedding IS NOT NULL AND embedding_model IS NOT NULL "
+            "AND embedding_version IS NOT NULL "
+            "AND embedding_dimensions = 384 AND embedded_at IS NOT NULL)",
+            name="ck_chunks_embedding_metadata_consistent",
+        ),
         ForeignKeyConstraint(
             ["workspace_id", "document_id"],
             ["documents.workspace_id", "documents.id"],
@@ -329,6 +339,15 @@ class DocumentChunk(Base):
             ondelete="CASCADE",
         ),
         Index("ix_chunks_workspace_document_order", "workspace_id", "document_id", "chunk_index"),
+        Index(
+            "ix_chunks_search_vector",
+            # Keep the config as SQL text, not a REGCONFIG-typed bind parameter.
+            # Alembic compiles index expressions with literal binds during
+            # ``alembic check``; rendering a Python ``"english"`` value as
+            # REGCONFIG fails in SQLAlchemy's PostgreSQL compiler.
+            literal_column("to_tsvector('english', text)"),
+            postgresql_using="gin",
+        ).ddl_if(dialect="postgresql"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -340,6 +359,11 @@ class DocumentChunk(Base):
     page_end: Mapped[int] = mapped_column(Integer, nullable=False)
     token_count: Mapped[int | None] = mapped_column(Integer)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(384))
+    embedding_model: Mapped[str | None] = mapped_column(String(100))
+    embedding_version: Mapped[str | None] = mapped_column(String(32))
+    embedding_dimensions: Mapped[int | None] = mapped_column(Integer)
+    embedded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

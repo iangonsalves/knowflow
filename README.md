@@ -4,7 +4,7 @@ KnowFlow is a workspace-based business knowledge platform. Its approved product 
 
 ## Current milestone
 
-M1 Foundation, M2 Identity & Tenancy, M3 Knowledge Areas & Documents, and M4 Document Processing Worker are implemented. M4 adds a durable PostgreSQL job queue and a separate backend worker that extracts PDF page text and stores page-aware chunks. Embeddings, search, and answers remain later milestones.
+M1–M4 are approved. M5 retrieval implementation is being revised to use local `intfloat/e5-small-v2` embeddings and is not approved until local PostgreSQL retrieval is verified. M6 answer generation/RAG has not started. KnowFlow's portfolio constraint requires core AI functionality to run without paid inference APIs; WorkOS authentication remains unchanged.
 
 ## Requirements
 
@@ -41,6 +41,8 @@ docker compose up --build -d
 docker compose run --rm api alembic upgrade head
 ```
 
+The worker downloads the pretrained embedding model from Hugging Face on its first startup into the persistent `model_cache` Docker volume (approximately 133 MB). Internet is needed for this first download only. After a successful model load, a cache marker makes API/worker loads use local files only; subsequent `docker compose down` / `up` cycles reuse the model without internet. An interrupted download is retried online and does not create the marker. `docker compose down --volumes` removes the cache along with local database/object-store data. No AI API key is required.
+
 The local services are:
 
 - KnowFlow sign-in and workspace UI: <http://localhost:3000>
@@ -53,8 +55,9 @@ The local services are:
 - PostgreSQL with pgvector: `localhost:5432`
 - MinIO console: <http://localhost:9001>
 - Document worker: the `worker` Compose service, using the same backend image/code as the API.
+- Workspace search: `POST /api/v1/workspaces/{id}/search`, available to Owners and Members. Results include source passage, filename, page range, hybrid rank/score and component ranks.
 
-Uploads create a `PROCESS_DOCUMENT` job in the same PostgreSQL transaction as document metadata. Job states are `QUEUED`, `RUNNING`, `RETRYABLE_FAILURE`, `PERMANENT_FAILURE`, `SUCCEEDED`, and `CANCELLED`; document states are `UPLOADED`, `PROCESSING`, `READY`, `FAILED`, and `DELETING`. The worker extracts text per page, normalizes it, creates deterministic overlapping chunks, and commits pages, chunks, `READY`, and `SUCCEEDED` atomically. Empty/scanned or malformed PDFs fail without OCR. A deleted document's queued/running work is cancelled and derived rows are removed.
+Uploads create a `PROCESS_DOCUMENT` job in the same PostgreSQL transaction as document metadata. Job states are `QUEUED`, `RUNNING`, `RETRYABLE_FAILURE`, `PERMANENT_FAILURE`, `SUCCEEDED`, and `CANCELLED`; document states are `UPLOADED`, `PROCESSING`, `READY`, `FAILED`, and `DELETING`. The worker extracts text per page, normalizes it, creates deterministic overlapping chunks, generates local embeddings and commits pages, embedded chunks, `READY`, and `SUCCEEDED` atomically. Empty/scanned or malformed PDFs fail without OCR. A deleted document's queued/running work is cancelled and derived rows are removed.
 
 Follow worker logs with:
 
@@ -71,7 +74,17 @@ docker compose exec db psql -U knowflow -d knowflow -c \
 
 Owners can retry failed documents from the document list. Job attempts use the configured maximum and bounded backoff; a worker crash is recovered after the lease expires. No Redis or external queue is used.
 
-Chunking is configurable with `KNOWFLOW_CHUNK_SIZE_CHARS` (default 1800) and `KNOWFLOW_CHUNK_OVERLAP_CHARS` (default 240). These provisional character-based defaults prefer paragraph/sentence boundaries and keep chunks within one source page; they can be tuned before retrieval work without changing the schema. M4 does not count tokens or generate embeddings.
+Chunking is configurable with `KNOWFLOW_CHUNK_SIZE_CHARS` (default 1800) and `KNOWFLOW_CHUNK_OVERLAP_CHARS` (default 240). The embedding runtime uses `KNOWFLOW_EMBEDDING_MODEL=intfloat/e5-small-v2`, pinned revision `ffb93f3bd4047442299a41ebb6fa998a38507c52`, 384 dimensions, `KNOWFLOW_EMBEDDING_VERSION=v1`, CPU device, cache path `/models`, and batch size 16. E5 uses `passage: ` prefixes for stored chunks and `query: ` prefixes for searches. Model files are cached by the `model_cache` Compose volume, shared by API and worker. No provider/API key configuration exists. The model supports up to 512 tokens per input; longer inputs are truncated.
+
+Semantic retrieval uses pgvector cosine distance with exact scans for the small current corpus. PostgreSQL FTS uses `websearch_to_tsquery('english', ...)`, `ts_rank_cd`, and a GIN index over `to_tsvector('english', text)`. Independent top-30 lists are combined with RRF (`KNOWFLOW_RRF_K=60`) and capped at `KNOWFLOW_RETRIEVAL_TOP_K=6`; candidate limits are configurable. Results include document/chunk IDs and page ranges and only include active READY documents with vectors matching the configured model/version. Search is workspace membership protected in FastAPI. An inaccessible knowledge-area ID returns 404.
+
+The M5 migration requeues active READY/PROCESSING documents through their existing processing jobs and sets them to UPLOADED, fencing any prior in-flight lease. The worker must finish embedding before they become READY/searchable again. Failed documents can be retried by an Owner. Changing the model/dimension/version requires an explicit re-embedding rollout; dimensions are pinned by migration and settings validation.
+
+The model is pretrained open-source software running locally; KnowFlow does not train a model. Document text and search queries are embedded inside the API/worker containers and are not sent to an AI inference service. Search uses no paid AI API. Future M6 Q&A must follow the zero-charge constraint and be designed around local inference unless the project owner explicitly approves a paid provider.
+
+For a manual retrieval check, upload `docs/samples/KnowFlow_Sample_HR_Policies.pdf` to a workspace knowledge area, wait until the document status is **Ready** (`docker compose logs -f worker`), then search **“How much annual leave do employees receive?”**. The expected top passage states that full-time employees receive **25 working days** and identifies **page 2** of the sample PDF. If the sample document was already READY before M5, the M5 migration requeues it and the worker must re-embed it before it becomes searchable.
+
+Also test **“How much vacation time do staff get?”** to exercise semantic retrieval beyond exact terms. M5 is verified only after both queries return the annual leave passage, filename and page 2 provenance without any AI API credentials.
 
 M3 upload validation accepts PDFs with a valid structure, no password protection, up to 20 MiB and 250 pages. A deleted document immediately returns 404 to application requests. Storage cleanup is retried on an Owner delete request for up to 24 hours; after successful cleanup, the metadata tombstone remains for 7 days and is then purged during subsequent document/area operations.
 
@@ -82,6 +95,8 @@ Readiness is expected to fail until the database migrations have been applied. C
 ```sh
 docker compose run --rm api ruff check app tests migrations
 docker compose run --rm api pytest
+docker compose run --rm api pytest tests/test_postgres_retrieval.py tests/test_postgres_job_concurrency.py
+docker compose run --rm api alembic check
 docker compose run --rm web npm run lint
 docker compose run --rm web npm run typecheck
 docker compose run --rm web npm run build
@@ -98,6 +113,8 @@ Remove the local database and object storage volumes only when you intend to dis
 ```sh
 docker compose down --volumes
 ```
+
+The model cache is also removed by `docker compose down --volumes`. Keep local data and cache with ordinary `docker compose down`.
 
 Do not commit `.env` or provider secrets. Authentication works only after WorkOS staging credentials and redirect settings are configured.
 KnowFlow

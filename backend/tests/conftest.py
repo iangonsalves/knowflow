@@ -8,7 +8,9 @@ import pytest
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import create_engine, event, select
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -16,6 +18,12 @@ from app.db.models import Base, MembershipRole, User, Workspace, WorkspaceMember
 from app.db.session import get_session
 from app.identity.dependencies import bearer_scheme, get_current_user
 from app.main import app
+
+
+@compiles(Vector, "sqlite")
+def _compile_vector_for_sqlite(_type, _compiler, **_kw):
+    # SQLite tests exercise non-vector paths; PostgreSQL integration tests cover pgvector.
+    return "JSON"
 
 
 @dataclass(frozen=True)

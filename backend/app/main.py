@@ -11,6 +11,7 @@ from app.core.errors import http_exception_handler, validation_exception_handler
 from app.documents.router import router as documents_router
 from app.identity.router import router as identity_router
 from app.knowledge_areas.router import router as knowledge_areas_router
+from app.search.router import router as search_router
 from app.tenancy.router import router as tenancy_router
 
 settings = get_settings()
@@ -18,13 +19,14 @@ settings = get_settings()
 app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
-    description="KnowFlow identity, workspace, knowledge-area, and document APIs.",
+    description="KnowFlow identity, workspace, document, and hybrid retrieval APIs.",
 )
 app.include_router(health_router)
 app.include_router(identity_router, prefix="/api/v1")
 app.include_router(tenancy_router, prefix="/api/v1")
 app.include_router(knowledge_areas_router, prefix="/api/v1")
 app.include_router(documents_router, prefix="/api/v1")
+app.include_router(search_router, prefix="/api/v1")
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 

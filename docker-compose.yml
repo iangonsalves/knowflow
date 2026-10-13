@@ -50,11 +50,15 @@ services:
       KNOWFLOW_OBJECT_STORAGE_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-knowflow_minio_local_only}
       KNOWFLOW_OBJECT_STORAGE_BUCKET: ${MINIO_BUCKET:-knowflow-documents}
       KNOWFLOW_OBJECT_STORAGE_REGION: ${KNOWFLOW_OBJECT_STORAGE_REGION:-us-east-1}
+      HF_HOME: /models
+      SENTENCE_TRANSFORMERS_HOME: /models
+      HF_HUB_DISABLE_TELEMETRY: "1"
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
       - ./backend:/app
+      - model_cache:/models
     depends_on:
       db:
         condition: service_healthy
@@ -81,9 +85,13 @@ services:
       KNOWFLOW_OBJECT_STORAGE_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-knowflow_minio_local_only}
       KNOWFLOW_OBJECT_STORAGE_BUCKET: ${MINIO_BUCKET:-knowflow-documents}
       KNOWFLOW_OBJECT_STORAGE_REGION: ${KNOWFLOW_OBJECT_STORAGE_REGION:-us-east-1}
+      HF_HOME: /models
+      SENTENCE_TRANSFORMERS_HOME: /models
+      HF_HUB_DISABLE_TELEMETRY: "1"
     command: python -m app.jobs.worker
     volumes:
       - ./backend:/app
+      - model_cache:/models
     restart: unless-stopped
     depends_on:
       db:
@@ -118,3 +126,4 @@ volumes:
   object_store_data:
   web_node_modules:
   web_next_cache:
+  model_cache:
