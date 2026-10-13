@@ -27,9 +27,9 @@ export default async function SearchPage({
       </header>
       <div className="content-wrap">
         <Link className="back-link" href={workspacePath}>← {workspace.name}</Link>
-        <p className="eyebrow">Workspace search</p>
-        <h1 className="page-title">Search documents</h1>
-        <p className="page-intro">Find passages using keyword and semantic matching across ready documents.</p>
+        <p className="eyebrow">Workspace knowledge</p>
+        <h1 className="page-title">Ask KnowFlow</h1>
+        <p className="page-intro">Ask a question in your own words and review the source passages that best match it.</p>
         <nav className="section-nav" aria-label="Workspace sections">
           <Link className="button button-secondary" href={`${workspacePath}/knowledge-areas`}>Knowledge areas</Link>
           <Link className="button button-secondary" href={`${workspacePath}/documents`}>Documents</Link>

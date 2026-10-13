@@ -4,7 +4,7 @@
 
 ## Context
 
-Workspaces own documents, pages, chunks and vectors. A missed workspace filter could expose confidential documents or contaminate generated answers.
+Workspaces own documents, pages, chunks and vectors. A missed workspace filter could expose confidential document evidence.
 
 ## Decision
 

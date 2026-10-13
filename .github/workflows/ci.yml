@@ -37,9 +37,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
+          cache-dependency-path: |
+            backend/pyproject.toml
+            backend/constraints-linux-cpu.txt
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install -e ".[dev]"
+      - run: python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.8.0+cpu"
+      - run: python -m pip install -e ".[dev]" --constraint constraints-linux-cpu.txt
       - run: ruff check app tests
       - run: alembic upgrade head
       - run: alembic check

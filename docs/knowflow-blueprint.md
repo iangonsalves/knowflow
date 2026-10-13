@@ -2,15 +2,17 @@
 
 **Planning baseline | 9 October 2026 | Version 1.0**
 
+**Approved M6 amendment | 13 October 2026:** This planning baseline originally described LLM-generated answers. That part is superseded: V1 Ask KnowFlow returns selected verbatim passages from M5 hybrid retrieval, with document/page provenance and weak/no-evidence states. V1 uses no generative model. See [ADR 0011](adr/0011-evidence-based-qa-without-generative-llm.md) and the [current V1 technical design](knowflow-v1-design.md).
+
 This document establishes the product and engineering plan for KnowFlow. It is a design baseline for review, not an implementation specification. Decisions explicitly locked by the project owner are marked **Locked**. Recommendations that still need validation are marked **Proposed**. No application code is included.
 
 ## Executive summary
 
-KnowFlow is a workspace-based business knowledge platform that helps teams organize internal documents and find reliable answers grounded in those documents. Members upload PDFs into knowledge areas, then search or ask questions and receive answers with structured document and page citations. When the available evidence is not sufficient, KnowFlow says so instead of inventing an answer.
+KnowFlow is a workspace-based business knowledge platform that helps teams organize internal documents and find relevant source passages. Members upload PDFs into knowledge areas, then search or ask questions and receive verbatim evidence with document and page provenance. KnowFlow reports weak or absent evidence instead of inventing an answer.
 
 The core engineering challenge is building a secure and dependable product around document ingestion and retrieval: users and workspaces, authorization, relational data, background processing, search, citations, testing, deployment, and observable failure handling. AI is an integration within that system, not the product's only feature.
 
-**Locked V1 stack and direction:** modular monolith; Next.js and TypeScript; Python and FastAPI; PostgreSQL with pgvector; multiple users and workspace memberships; Owner and Member roles; knowledge areas; backend-enforced tenant isolation; keyword plus semantic search; grounded answers with structured citations and insufficient-evidence handling. Document comparison and change intelligence are future work.
+**Current V1 stack and direction:** modular monolith; Next.js and TypeScript; Python and FastAPI; PostgreSQL with pgvector; multiple users and workspace memberships; Owner and Member roles; knowledge areas; backend-enforced tenant isolation; keyword plus semantic search; evidence-based Q&A with source passages and insufficient-evidence messaging. No generative LLM is used. Document comparison and change intelligence are future work.
 
 ## 1. Project overview
 
@@ -18,7 +20,7 @@ The core engineering challenge is building a secure and dependable product aroun
 
 Organizations accumulate policies, procedures, handbooks, technical guidance, and operational manuals in folders and shared drives. People often do not know which document is current or where a particular rule is stated. Searching filenames or reading long PDFs is slow, while generic chat answers cannot be trusted without evidence.
 
-KnowFlow organizes documents by workspace and knowledge area, makes their content searchable, and answers questions using passages retrieved from that workspace's documents. The user can inspect the evidence behind an answer.
+KnowFlow organizes documents by workspace and knowledge area, makes their content searchable, and presents relevant passages retrieved from that workspace's documents. The user opens the original source to interpret the evidence.
 
 ### Target users and use cases
 
@@ -32,17 +34,17 @@ The initial users are small and medium-sized organizations with internal documen
 
 V1 is a document knowledge and retrieval product, not a replacement for a full document-management suite, records archive, or compliance certification system.
 
-### Why this is software engineering with AI integration
+### Why this is software engineering with retrieval integration
 
-The project is primarily about modeling a multi-user product and making it reliable: tenant isolation, API boundaries, document lifecycle, durable processing, data integrity, search, failure recovery, security, tests, deployment, and maintainability. Embeddings and language models provide selected capabilities inside those boundaries. The project does not require custom model training or research into new ML methods.
+The project is primarily about modeling a multi-user product and making it reliable: tenant isolation, API boundaries, document lifecycle, durable processing, data integrity, search, failure recovery, security, tests, deployment, and maintainability. A pretrained local embedding model provides semantic retrieval inside those boundaries. V1 uses no generative model and requires no custom model training or ML research.
 
 ### Portfolio intent
 
-KnowFlow should complement existing evidence of backend APIs, databases, Docker, CI/CD, SaaS workflows, and full-stack development. It should add demonstrable experience with Python/FastAPI, secure multi-tenancy, asynchronous document processing, PostgreSQL search/vector retrieval, grounded AI integration, and clear system design. The goal is a small number of substantial, polished projects that can be explained confidently to software engineering recruiters and interviewers.
+KnowFlow should complement existing evidence of backend APIs, databases, Docker, CI/CD, SaaS workflows, and full-stack development. It should add demonstrable experience with Python/FastAPI, secure multi-tenancy, asynchronous document processing, PostgreSQL search/vector retrieval, evidence provenance, and clear system design. The goal is a small number of substantial, polished projects that can be explained confidently to software engineering recruiters and interviewers.
 
 ## 2. Product vision
 
-An organization creates a workspace, organizes knowledge areas, and uploads internal documents. Members search by phrase or ask a question. KnowFlow searches only documents they are allowed to access, assembles relevant passages, and presents a concise answer with citations the user can open and verify.
+An organization creates a workspace, organizes knowledge areas, and uploads internal documents. Members search by phrase or ask a question. KnowFlow searches only documents they are allowed to access, selects relevant verbatim passages, and presents source links the user can open and verify. It does not generate or paraphrase an answer.
 
 Example structure:
 
@@ -60,9 +62,9 @@ Acme Technologies (workspace)
     `-- Incident Management Procedure.pdf
 ```
 
-Example question: “What does the annual leave policy say about carrying leave into the following year?” Expected behavior: retrieve passages from documents in the selected workspace, answer only to the extent those passages support, and show document title and page citations. If there is no usable evidence, explain that the workspace documents do not provide enough information and suggest refining the query or checking the source library.
+Example question: “What does the annual leave policy say about carrying leave into the following year?” Expected behavior: retrieve the best verbatim passage and supporting source passages from documents in the selected workspace, show document title and page provenance, and let the user open the source. If evidence is weak or absent, say so; do not produce an answer.
 
-KnowFlow is more than “upload a PDF and chat” because it includes workspaces and membership, organized knowledge areas, a document lifecycle with processing status and recovery, searchable document metadata and text, access-controlled retrieval, traceable citations, explicit abstention, deletion cleanup, and tests for these behaviors.
+KnowFlow is more than “upload a PDF and chat” because it includes workspaces and membership, organized knowledge areas, a document lifecycle with processing status and recovery, searchable document metadata and text, access-controlled hybrid retrieval, deterministic evidence selection, source navigation, explicit weak/no-evidence states, deletion cleanup, and tests for these behaviors.
 
 ## 3. User personas and journeys
 
@@ -82,27 +84,27 @@ The Member can access only workspaces they belong to. They can browse knowledge 
 
 | Phase | Scope | Why it belongs here |
 |---|---|---|
-| **MVP / V1** | Authentication; multi-user workspaces and memberships; Owner and Member roles; knowledge areas; PDF upload, validation and storage; document metadata and processing status; extraction with page provenance; chunking and embeddings; PostgreSQL/pgvector storage; basic PostgreSQL keyword search plus semantic search; grounded Q&A with structured source/page citations; insufficient-evidence response; deletion and derived-data cleanup; Docker local setup; automated tests; CI; initial cloud deployment | Delivers one coherent, usable journey while proving core software engineering and AI integration. Keeps authorization and data boundaries foundational. |
-| **V2** | Invitations and membership lifecycle improvements; stronger role permissions if validated; categories and tags; conversation history; richer audit events; robust asynchronous job queue/retries and worker scaling; document versioning; operational dashboards and improved observability | Builds on a validated ingestion-and-answer loop and real usage needs. Version history is useful but adds lifecycle, storage, and retrieval semantics that should not delay V1. |
+| **MVP / V1** | Authentication; multi-user workspaces and memberships; Owner and Member roles; knowledge areas; PDF upload, validation and storage; document metadata and processing status; extraction with page provenance; chunking and local embeddings; PostgreSQL/pgvector storage; keyword plus semantic retrieval; evidence-based Q&A with verbatim source/page passages and weak/no-evidence messaging; deletion and derived-data cleanup; Docker local setup; automated tests; CI; initial cloud deployment | Delivers one coherent, usable journey and demonstrates software engineering without paid AI APIs or generative inference. Keeps authorization and data boundaries foundational. |
+| **V2** | Invitations and membership lifecycle improvements; stronger role permissions if validated; categories and tags; conversation history; richer audit events; worker scaling; document versioning; operational dashboards and improved observability | Builds on a validated ingestion-and-evidence loop and real usage needs. Version history is useful but adds lifecycle, storage, and retrieval semantics that should not delay V1. |
 | **V3 / future** | Version comparison and change intelligence; analytics; richer integrations/imports; advanced search filters; organization-level administration; optional OCR for scanned documents; more advanced evaluation and configurable retrieval | These are valuable extensions but need proven product demand and reliable V1 foundations. Comparison and change detection explicitly remain outside MVP. |
 
 ## 5. V1 scope and end-to-end behavior
 
 V1 is complete when a second registered user can be given access to a workspace and both authorized users can find evidence from its PDFs without being able to observe another workspace's data.
 
-1. A user registers or signs in through the selected authentication mechanism.
+1. A user signs in through the approved WorkOS AuthKit flow.
 2. The user creates a workspace and is assigned Owner membership.
 3. The Owner creates a knowledge area, such as HR.
 4. The Owner uploads a PDF. The API validates type, size, and basic file safety, stores the original, records metadata, and creates a processing record.
 5. A worker extracts text page by page, retains page provenance, chunks text, requests embeddings, and stores chunks and vectors scoped to the document/workspace.
 6. The document transitions through a visible status and becomes searchable only after successful processing.
 7. An authorized member searches by keyword or asks a question. The backend derives workspace access from the authenticated user and filters retrieval accordingly.
-8. The system combines keyword and semantic candidates, ranks/limits evidence, constructs bounded context, and asks the configured LLM for an answer constrained to that evidence.
-9. The API returns answer text, an evidence/abstention status, and structured citations containing document identity, page, and passage reference. The UI renders citations as links to document detail/page context.
-10. When evidence falls below a defined threshold or the model cannot support a response from the supplied passages, the system returns an insufficient-evidence outcome.
+8. The system combines keyword and semantic candidates with RRF, selects best and supporting source passages deterministically, and preserves source wording apart from harmless whitespace normalization.
+9. The API returns those passages with an evidence state and document/page provenance. The UI links to the authorized document detail page at the relevant PDF page.
+10. Retrieval agreement is labeled as evidence found, weak evidence, or no evidence. KnowFlow does not generate or paraphrase factual answers.
 11. The Owner may delete a document. The original file and derived text/chunks/embeddings are removed or made inaccessible through a deliberate, retryable cleanup flow.
 
-Proposed V1 limit: text-based PDFs; OCR for image-only scans is deferred unless a concrete user need justifies its complexity. File size, page count, embedding provider, LLM provider, and evidence thresholds are configuration/design decisions for the detailed specification.
+V1 accepts text-based PDFs; OCR for image-only scans is deferred. Upload, page and evidence presentation limits are configurable. Local `intfloat/e5-small-v2` embeddings support semantic search. No generative model or paid AI API is part of V1.
 
 ## 6. Screens and application layout
 
@@ -134,7 +136,7 @@ The application should favor a consistent workspace shell: left navigation for w
 | Processing status | Show uploaded/processing/ready/failed, safe failure details, retry when permitted, and timestamps. |
 | Document detail/view | Metadata, processing state, extracted text or page preview if supported, and source context. |
 | Search | Keyword and semantic results with snippets, area/document and page references. |
-| Ask KnowFlow | Question input, answer, explicit insufficient-evidence state, structured citations, and optional follow-up. |
+| Ask KnowFlow | Question input, best/supporting verbatim source evidence, weak/no-evidence state, and source links. No generated answer or follow-up chat. |
 | Members/settings | Workspace name and member list/roles; Owner-only controls. No elaborate invitation center in V1. |
 
 Wireframe is illustrative; exact navigation, responsive behavior, PDF viewer, and membership UX are to be finalized in the V1 design.
@@ -157,10 +159,10 @@ Wireframe is illustrative; exact navigation, responsive behavior, PDF viewer, an
                          | retrieval, Q&A        |
                          +--+---------+-------+--+
                             |         |       |
-                 SQL/pgvector|    file|       |LLM / embedding APIs
+                 SQL/pgvector|    file|       |local embedding model
                             |         |       |
                    +--------v--+  +---v----+  +-------v---------+
-                   | PostgreSQL|  | Object |  | Model providers |
+                   | PostgreSQL|  | Object |  | e5-small-v2 CPU |
                    | + pgvector|  | storage|  | via adapters    |
                    +-----^-----+  +---^----+  +-----------------+
                          |             |
@@ -173,7 +175,7 @@ Wireframe is illustrative; exact navigation, responsive behavior, PDF viewer, an
   Docker Compose (local): frontend + API + worker + PostgreSQL (+ optional storage emulator)
 ```
 
-The API owns application rules and authorization. PostgreSQL is the system of record. Original files live in object/file storage with database metadata and keys. The worker receives durable work records and updates processing state. Provider-specific LLM and embedding calls sit behind small interfaces so vendor changes do not leak throughout business logic. CI validates changes; deployment can begin with a small managed application runtime and managed PostgreSQL. Azure is a reasonable candidate given the owner's Azure familiarity, but should be selected based on cost, operational simplicity, and service fit rather than résumé keywords.
+The API owns application rules and authorization. PostgreSQL is the system of record. Original files live in object/file storage with database metadata and keys. The worker receives durable work records and updates processing state. A local embedding interface keeps model details out of business logic; V1 has no generative LLM interface. CI validates changes; deployment can begin with a small managed application runtime and managed PostgreSQL. Azure is a reasonable candidate given the owner's Azure familiarity, but should be selected based on cost, operational simplicity, and service fit rather than résumé keywords.
 
 ## 8. Document processing architecture
 
@@ -189,18 +191,18 @@ Suggested states are `UPLOADED`, `PROCESSING`, `READY`, and `FAILED`. State tran
 
 Retain original file identity, checksum, size, content type, uploader, workspace, knowledge area, and timestamps. Each extracted page and chunk must preserve its source document and page range. On reprocessing, replace derived records atomically or stage new output before switching the document to READY. Deletion must prevent further access immediately, then clean the file and derived records; cleanup failure should be observable and retryable. Retention and soft-delete behavior need a final product decision.
 
-## 9. Search and RAG architecture
+## 9. Search and evidence Q&A architecture
 
 1. **Ingestion and embeddings:** extracted text is split into bounded, overlapping chunks with stable document/page provenance. An embedding provider converts each chunk into a vector stored in pgvector. Provider/model and vector dimensions are recorded/configured consistently.
 2. **Keyword search:** PostgreSQL full-text search supports exact policy terms, names, acronyms, and numbers. It provides a practical baseline and complements semantic matching.
 3. **Semantic search:** embed the user's query using the same embedding model and retrieve nearest chunks from pgvector. Similarity is a relevance signal, not proof that a passage answers the question.
-4. **Authorization and retrieval:** establish authorized workspace IDs from the session and membership table before querying. Apply workspace filters to both keyword and vector paths in the database query. Combine candidates with a simple, explainable ranking method in V1; avoid a separate search service initially.
-5. **Context construction:** deduplicate and cap the strongest passages; include document title, page, and chunk identifiers. Enforce token/context limits and avoid sending unrelated content.
-6. **Answer generation:** ask the LLM to answer only from the supplied passages, preserve uncertainty, and return a structured response. The model is not trusted to invent citation IDs.
-7. **Citation rendering:** validate model-referenced source IDs against the retrieved set and return citations from server-owned metadata (document, page, snippet). Unknown citation IDs are discarded or cause a safe fallback.
-8. **Insufficient evidence:** use retrieval score/coverage checks plus a constrained answer format. If evidence is too weak or the answer lacks support, return a clear abstention. Thresholds must be evaluated, not guessed permanently.
+4. **Authorization and retrieval:** establish authorized workspace IDs from the session and membership table before querying. Apply workspace filters to both keyword and vector paths in the database query. Combine candidates with RRF; avoid a separate search service initially.
+5. **Evidence selection:** deterministically select the best ranked non-duplicate source passage and a small number of supporting passages. Preserve source wording apart from whitespace normalization; use the full chunk when a smaller passage cannot be selected safely.
+6. **Evidence state:** label results as corroborated by both retrieval paths, weakly supported by one path, or absent. These are retrieval-agreement signals, not probabilities or claims that a passage answers the question.
+7. **Source navigation:** construct links from authorized document IDs and stored page provenance. The existing document API rechecks workspace membership before streaming the PDF.
+8. **Insufficient evidence:** show weak matches with an explicit caution, or report no matching evidence. V1 does not generate answers.
 
-Uploaded text is untrusted data. It may contain instructions aimed at the model. Treat retrieved passages only as quoted evidence, tell the model to ignore instructions contained in source material, limit tools/capabilities (ideally none for V1), and never let model output bypass authorization or select arbitrary files. Prompting is not a security boundary; tenant filtering, input/output validation, and constrained capabilities are.
+Uploaded text is untrusted content. Treat it as source evidence only; it cannot affect authorization or trigger tools. Tenant filters and the authorized source route remain the security boundary.
 
 ## 10. Database design
 
@@ -240,7 +242,7 @@ Tenant considerations: workspace ID should be present or derivable for every ten
 
 Multiple users and memberships are **Locked for V1**. A workspace has an Owner and Members; a user can belong to more than one workspace. Ownership and roles are represented in `workspace_memberships`, not inferred from a client-provided workspace ID.
 
-For each request, authentication identifies the user. A backend authorization dependency/service loads membership for the requested workspace and verifies the action against the role. Data access functions accept an authorized workspace context and always scope reads/writes by it. Search retrieves candidates only after applying workspace scope; citations are validated against those candidates; generated answers are assembled only from authorized passages. The model never receives other tenant data. Workers verify document/workspace association before processing and deleting.
+For each request, authentication identifies the user. A backend authorization dependency/service loads membership for the requested workspace and verifies the action against the role. Data access functions accept an authorized workspace context and always scope reads/writes by it. Search retrieves candidates only after applying workspace scope; evidence and source paths are built only from those authorized candidates. Workers verify document/workspace association before processing and deleting.
 
 Add negative tests with two workspaces and overlapping users to prove that one user cannot enumerate, fetch, search, cite, delete, or infer another workspace's documents or chunks. Return consistent not-found/forbidden behavior to avoid leaking resource existence. Membership creation and transfer/owner deletion policy should be finalized in detailed V1 design; maintain at least one Owner per active workspace.
 
@@ -257,7 +259,7 @@ Illustrative resource API; exact payloads, pagination, errors, and auth transpor
 | Documents | `GET/POST /workspaces/{workspace_id}/documents`, `GET/DELETE /workspaces/{workspace_id}/documents/{document_id}`, optional `GET .../{document_id}/content` |
 | Processing | `GET /workspaces/{workspace_id}/documents/{document_id}/status`, `POST .../{document_id}/retry` (Owner-only or policy-defined) |
 | Search | `POST /workspaces/{workspace_id}/search` with query, filters and limit; response includes ranked snippets and source/page metadata |
-| Questions | `POST /workspaces/{workspace_id}/questions` with question and optional area filter; response includes answer status, answer and structured citations |
+| Ask/evidence | `POST /workspaces/{workspace_id}/ask` with question and optional area filter; response includes best/supporting passages, provenance and evidence state |
 
 Use consistent validation and error envelopes, bounded pagination/results, request IDs, and OpenAPI documentation. Consider signed upload URLs only if direct object-store uploads are needed; a backend-mediated upload is simpler for a small V1, subject to configured size limits.
 
@@ -270,7 +272,7 @@ Use consistent validation and error envelopes, bounded pagination/results, reque
 - **Secrets:** environment/secret manager only; never commit provider credentials. Keep separate development/test/production configuration and rotate exposed secrets.
 - **Validation and abuse:** typed request schemas, bounded payloads, safe error messages, upload and question rate limits, timeouts, and quotas when exposed publicly.
 - **Document trust boundary:** extracted content may be malicious or misleading. It is data, not executable instructions. Do not allow documents to trigger tools or affect access control.
-- **LLM boundaries:** minimize submitted personal data, avoid sending unnecessary pages, constrain output schema, validate citations, log metadata rather than sensitive full prompts by default, and provide provider error handling.
+- **Evidence boundary:** never treat retrieved content as instructions or let document text affect access control. Source links must resolve through the authorized document API. No generative inference runs in V1.
 - **Database/storage:** least-privilege credentials, encrypted transport, backups, private object storage, and retention/deletion policy. Ensure logs do not expose document content or tokens.
 
 ## 14. Testing strategy
@@ -282,8 +284,8 @@ Use consistent validation and error envelopes, bounded pagination/results, reque
 | Authorization/tenant isolation | Two-user/two-workspace matrix; cross-tenant reads, updates, deletes, search, citations and worker actions all denied without leaking content. |
 | Processing | Valid PDF extraction by page, malformed/empty/large PDFs, duplicate/retry idempotency, embedding provider failure, cleanup and retry. Use deterministic fixtures and mocked external services. |
 | Retrieval/citations | Known queries retrieve expected source passages; returned citations are server-validated, point to correct document/page, and never cite an unreturned chunk. Include no-evidence cases. |
-| End-to-end | One focused browser path: owner creates workspace/area, uploads fixture, waits for ready, asks question, opens citation; member access and unauthorized workspace denial. Avoid a large brittle UI suite. |
-| Evaluation set | Maintain a small fixed set of representative questions, expected source documents/pages/passages, and expected abstentions. Track whether retrieval includes expected evidence and whether citation/answer behavior regresses. |
+| End-to-end | One focused browser path: owner creates workspace/area, uploads fixture, waits for ready, asks a question, reviews evidence and opens source; member access and unauthorized workspace denial. Avoid a large brittle UI suite. |
+| Evaluation set | Maintain representative questions, expected source documents/pages/passages, and unsupported questions. Track evidence retrieval, provenance, and weak/no-evidence behavior. |
 
 External model calls should not make ordinary tests nondeterministic or costly. Mock provider interfaces in unit/integration tests; run a small opt-in evaluation against real providers when tuning prompts or retrieval.
 
@@ -339,7 +341,7 @@ Do not choose Kubernetes, service mesh, Kafka, or complex cloud networking for a
 | 3. Knowledge areas and document management | Area/document metadata, upload validation/storage, list/detail/delete, status model | Upload and manage PDFs with visible lifecycle | Validation, CRUD, deletion authorization and storage tests | Invalid files rejected; authorized uploads are recorded and inaccessible across tenants |
 | 4. Processing pipeline | Worker/job records, extraction, page provenance, chunking, embeddings, retries | Documents move to READY or FAILED with inspectable status | Fixtures, idempotency, provider failure/retry, cleanup tests | READY means searchable derived data is complete; retry does not duplicate output |
 | 5. Search and retrieval | PostgreSQL keyword search, pgvector semantic search, tenant filters, fusion/ranking | Authorized search results with snippets and provenance | Retrieval evaluation set and tenant isolation | Representative queries return expected passages; exact terms and semantic queries both work |
-| 6. Grounded Q&A | Context construction, LLM adapter, structured answer/citations, abstention | Ask KnowFlow returns supported answer or insufficient-evidence state | Citation integrity, unsupported question and prompt-injection fixtures | Every citation maps to retrieved authorized evidence; unsupported requests abstain |
+| 6. Evidence Q&A | Verbatim passage selection, deduplication, provenance, evidence state and source links | Ask KnowFlow returns best/supporting source passages or weak/no-evidence message | Passage fidelity, page provenance, unsupported query, role and source authorization tests | Only authorized source evidence is shown; no generative model or history |
 | 7. Product completion and security | Main screens, role-aware UX, logs/error states, rate limits and security review | Coherent usable end-to-end product | API, browser E2E path, authorization regression suite | Owner and Member flows work; failure states are actionable and safe |
 | 8. Release and deployment | Container pipeline, environment/secrets, managed DB/storage/app runtime, backups/health checks | Public or controlled demo deployment | Deployment smoke tests, migration/rollback check, upload-to-answer smoke test | Deployed journey works; backups and operational failure visibility are documented |
 | 9. V2 improvements | Based on use and feedback: history, invitations, tags, audit, versioning, job queue improvements | Prioritized next release | Feature-specific tests and updated evaluation | Each addition addresses observed need and preserves tenant guarantees |
@@ -390,7 +392,7 @@ PLANNING
    -> DOCUMENT MANAGEMENT
    -> PROCESSING PIPELINE
    -> SEARCH / RETRIEVAL
-   -> RAG / CITATIONS
+   -> EVIDENCE / SOURCES
    -> TESTING / SECURITY
    -> DOCKER / CI/CD
    -> DEPLOYMENT
@@ -401,7 +403,7 @@ The sequence represents dependencies and a reviewable progression, not a promise
 
 ## Decisions locked and decisions for detailed V1 design
 
-**Locked by project owner:** modular monolith; Next.js/TypeScript; Python/FastAPI; PostgreSQL/pgvector; multiple workspace users/memberships from the beginning; Owner and Member roles; no elaborate invitations initially; knowledge areas; backend tenant isolation; ingestion-to-grounded-answer/citation workflow; keyword search alongside semantic; insufficient-evidence behavior; version comparison/change intelligence deferred.
+**Current owner-approved decisions:** modular monolith; Next.js/TypeScript; Python/FastAPI; PostgreSQL/pgvector; multiple workspace users/memberships from the beginning; Owner and Member roles; no elaborate invitations initially; knowledge areas; backend tenant isolation; ingestion-to-local-embedding/hybrid-retrieval/evidence workflow; no generative LLM or paid AI API; no OCR or conversation history; version comparison/change intelligence deferred.
 
 **Proposed for detailed design:** managed authentication rather than custom password handling; Owner-only content/membership management with Members primarily searching and asking; PDF-only text extraction for V1; no persisted conversation history until justified; durable database job records and a worker process before adding Redis; object storage for deployed originals; no OCR in V1; a simple hybrid ranking method and measured abstention thresholds. These should be confirmed or adjusted when we prepare the detailed V1 product specification.
 

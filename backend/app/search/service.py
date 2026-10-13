@@ -18,6 +18,7 @@ class RankedChunk:
     chunk: DocumentChunk
     document: Document
     rank: int
+    signal: float = 0.0
 
 
 @dataclass
@@ -27,6 +28,8 @@ class FusedChunk:
     keyword_rank: int | None = None
     vector_rank: int | None = None
     score: float = 0.0
+    keyword_score: float | None = None
+    vector_similarity: float | None = None
 
 
 def fuse_rankings(
@@ -40,6 +43,10 @@ def fuse_rankings(
             )
             setattr(item, source, candidate.rank)
             item.score += 1.0 / (rrf_k + candidate.rank)
+            if source == "keyword_rank":
+                item.keyword_score = candidate.signal
+            else:
+                item.vector_similarity = candidate.signal
     return sorted(
         fused.values(),
         key=lambda item: (
@@ -104,20 +111,29 @@ def retrieve(
     english_config = literal_column("'english'::regconfig")
     tsquery = func.websearch_to_tsquery(english_config, request.query)
     search_vector = func.to_tsvector(english_config, DocumentChunk.text)
+    keyword_score = func.ts_rank_cd(search_vector, tsquery)
     keyword_rows = session.execute(
-        authorized.where(search_vector.op("@@")(tsquery))
-        .order_by(func.ts_rank_cd(search_vector, tsquery).desc(), DocumentChunk.id)
+        authorized.add_columns(keyword_score.label("keyword_score"))
+        .where(search_vector.op("@@")(tsquery))
+        .order_by(keyword_score.desc(), DocumentChunk.id)
         .limit(settings.keyword_candidates)
     ).all()
-    keyword = [RankedChunk(row[0], row[1], rank) for rank, row in enumerate(keyword_rows, start=1)]
+    keyword = [
+        RankedChunk(row[0], row[1], rank, float(row[2]))
+        for rank, row in enumerate(keyword_rows, start=1)
+    ]
 
     vector_column = DocumentChunk.embedding
+    vector_distance = vector_column.cosine_distance(query_embedding.vectors[0])
     vector_rows = session.execute(
-        authorized.order_by(
-            vector_column.cosine_distance(query_embedding.vectors[0]), DocumentChunk.id
-        ).limit(settings.vector_candidates)
+        authorized.add_columns(vector_distance.label("vector_distance"))
+        .order_by(vector_distance, DocumentChunk.id)
+        .limit(settings.vector_candidates)
     ).all()
-    vector = [RankedChunk(row[0], row[1], rank) for rank, row in enumerate(vector_rows, start=1)]
+    vector = [
+        RankedChunk(row[0], row[1], rank, 1.0 - float(row[2]))
+        for rank, row in enumerate(vector_rows, start=1)
+    ]
 
     limit = request.limit or settings.retrieval_top_k
     fused = fuse_rankings(keyword, vector, rrf_k=settings.rrf_k)[:limit]
@@ -134,6 +150,8 @@ def retrieve(
             rrf_score=item.score,
             keyword_rank=item.keyword_rank,
             vector_rank=item.vector_rank,
+            keyword_score=item.keyword_score,
+            vector_similarity=item.vector_similarity,
         )
         for rank, item in enumerate(fused, start=1)
     ]

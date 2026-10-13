@@ -11,22 +11,20 @@ from app.db.session import get_session
 from app.embeddings.factory import get_embedding_provider
 from app.embeddings.provider import EmbeddingConfigurationError, EmbeddingError, EmbeddingProvider
 from app.identity.dependencies import CurrentUser
-from app.search.schemas import SearchRequest, SearchResponse
+from app.search.evidence import select_evidence
+from app.search.schemas import AskResponse, SearchRequest, SearchResponse
 from app.search.service import retrieve
 from app.tenancy.policies import require_workspace_access
 
 router = APIRouter(tags=["search"])
 
 
-@router.post("/workspaces/{workspace_id}/search", response_model=SearchResponse)
-def search_workspace(
+def _retrieve_for_workspace(
     workspace_id: UUID,
     payload: SearchRequest,
-    current_user: CurrentUser,
-    session: Annotated[Session, Depends(get_session)],
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> SearchResponse:
-    require_workspace_access(session, current_user, workspace_id)
+    session: Session,
+    settings: Settings,
+):
     if len(payload.query) > settings.max_question_chars:
         raise HTTPException(
             status_code=422,
@@ -64,4 +62,56 @@ def search_workspace(
             status_code=503 if error.retryable else 502,
             detail={"code": error.code, "message": error.safe_message},
         ) from error
+    return results
+
+
+@router.post("/workspaces/{workspace_id}/search", response_model=SearchResponse)
+def search_workspace(
+    workspace_id: UUID,
+    payload: SearchRequest,
+    current_user: CurrentUser,
+    session: Annotated[Session, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> SearchResponse:
+    require_workspace_access(session, current_user, workspace_id)
+    results = _retrieve_for_workspace(workspace_id, payload, session, settings)
     return SearchResponse(query=payload.query, results=results)
+
+
+@router.post("/workspaces/{workspace_id}/ask", response_model=AskResponse)
+def ask_workspace(
+    workspace_id: UUID,
+    payload: SearchRequest,
+    current_user: CurrentUser,
+    session: Annotated[Session, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> AskResponse:
+    """Return selected source evidence; this endpoint does not generate answers."""
+    require_workspace_access(session, current_user, workspace_id)
+    results = _retrieve_for_workspace(workspace_id, payload, session, settings)
+    selected = select_evidence(
+        results,
+        question=payload.query,
+        workspace_id=str(workspace_id),
+        settings=settings,
+    )
+    messages = {
+        "evidence_found": (
+            "Found substantive source passages relevant to your question. Review the sources."
+        ),
+        "weak_evidence": (
+            "No strong evidence was found. These passages may be related to your question; "
+            "review the sources."
+        ),
+        "no_evidence": (
+            "No relevant source evidence was found in ready documents in this workspace."
+        ),
+    }
+    return AskResponse(
+        question=payload.query,
+        evidence_state=selected.state,
+        message=messages[selected.state],
+        best_evidence=selected.best,
+        supporting_evidence=selected.supporting,
+        related_evidence=selected.related,
+    )

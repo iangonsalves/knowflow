@@ -1,8 +1,8 @@
 # KnowFlow Engineering Guide
 
-**Codebase coverage:** M1 Foundation through M5 Retrieval  
-**Purpose:** understand the implementation well enough to navigate, debug, and explain it.  
-**Scope boundary:** this guide describes code currently in the repository through retrieval. Question answering, RAG generation, persisted conversations, and generated citations remain future work.
+**Codebase coverage:** M1 Foundation through M6 Evidence-Based Q&A
+**Purpose:** understand the implementation well enough to navigate, debug, and explain it.
+**Scope boundary:** M6 presents verbatim evidence returned by M5 retrieval. V1 has no generative LLM, generated answer, or persisted conversation.
 
 KnowFlow is currently a modular application with a Next.js server-rendered frontend, a FastAPI backend, PostgreSQL, private S3-compatible object storage (MinIO locally), and a separate Python worker process. WorkOS authenticates people; KnowFlow's database decides workspace access. M4 takes a stored text-based PDF and persists extracted pages and deterministic page-aware chunks. This guide follows those paths through the real files and tests.
 
@@ -41,39 +41,41 @@ The following tree omits dependency folders and generated build artifacts.
 
 ```text
 knowflow/
-├── .env.example
-├── docker-compose.yml
-├── README.md
-├── .github/workflows/ci.yml
-├── apps/web/
-│   ├── Dockerfile
-│   └── src/
-│       ├── proxy.ts
-│       ├── lib/api.ts
-│       └── app/
-│           ├── actions.ts
-│           ├── callback/route.ts
-│           ├── sign-in/route.ts
-│           ├── sign-up/route.ts
-│           ├── api/workspaces/[workspaceId]/documents/[documentId]/content/route.ts
-│           └── workspaces/...
-├── backend/
-│   ├── Dockerfile
-│   ├── alembic.ini
-│   ├── pyproject.toml
-│   ├── app/
-│   │   ├── main.py, core/, db/, api/
-│   │   ├── identity/, tenancy/, knowledge_areas/, documents/
-│   │   └── jobs/, processing/
-│   ├── migrations/
-│   │   ├── env.py
-│   │   └── versions/0001...0004...
-│   └── tests/
-├── docs/
-│   ├── adr/0001...0009...
-│   ├── knowflow-blueprint.md
-│   ├── knowflow-v1-design.md
-│   └── samples/KnowFlow_Sample_HR_Policies.pdf
+|--  .env.example
+|--  docker-compose.yml
+|--  README.md
+|--  .github/workflows/ci.yml
+|--  apps/web/
+|   |--  Dockerfile
+|   |--  src/
+|       |--  proxy.ts
+|       |--  lib/api.ts
+|       |--  app/
+|           |--  actions.ts
+|           |--  callback/route.ts
+|           |--  sign-in/route.ts
+|           |--  sign-up/route.ts
+|           |--  api/workspaces/[workspaceId]/documents/[documentId]/content/route.ts
+|           |--  api/workspaces/[workspaceId]/ask/route.ts
+|           |--  workspaces/...
+|--  backend/
+|   |--  Dockerfile
+|   |--  alembic.ini
+|   |--  pyproject.toml
+|   |--  app/
+|   |   |--  main.py, core/, db/, api/
+|   |   |--  identity/, tenancy/, knowledge_areas/, documents/, search/
+|   |   |--  jobs/, processing/
+|   |--  migrations/
+|   |   |--  env.py
+|   |   |--  versions/0001...0004...
+|   |--  tests/
+|--  docs/
+|   |--  adr/0001...0009...
+|   |--  knowflow-blueprint.md
+|   |--  knowflow-v1-design.md
+|   |--  samples/KnowFlow_Sample_HR_Policies.pdf
+|   |--  samples/KnowFlow_Sample_Information_Security_Policy.pdf
 ```
 
 ### Frontend paths
@@ -87,6 +89,7 @@ knowflow/
 | `apps/web/src/app/actions.ts` | Server actions submit workspace, membership, area, upload, retry, deletion, and sign-out operations. `authorizedFetch` forwards the bearer token. |
 | `apps/web/src/app/workspaces/...` | Server components fetch scoped data and render workspace, membership, area, document list, and document detail screens. |
 | `apps/web/src/app/api/workspaces/[workspaceId]/documents/[documentId]/content/route.ts` | Authenticated Next.js streaming proxy for inline PDF display and download. |
+| `apps/web/src/app/api/workspaces/[workspaceId]/ask/route.ts` | Authenticated BFF proxy for the evidence-oriented Ask endpoint. |
 
 ### Backend paths
 
@@ -436,7 +439,7 @@ ADRs are under `docs/adr/`. ADRs describe approved direction; not every future d
 | `0004-object-storage-and-document-deletion.md` | Keep originals private and avoid database blobs → DB bytes, local-only storage, object adapter → private object storage, MinIO locally, stream through API, tombstone/retry/purge → smaller relational DB and reversible access revocation; cleanup must be retried. |
 | `0005-durable-database-worker.md` | Processing outlives requests and must survive restart → synchronous API, Redis queue/framework, PostgreSQL job row → one row/document, `SKIP LOCKED`, lease/retry worker → durable with current DB and low infrastructure cost; polling/lease behavior needs care. |
 | `0006-chunks-and-embeddings.md` | Store future vectors with chunk provenance → separate table or vector service → vector directly on chunks with model metadata in future and configurable chunking → compact query shape; requires controlled replacement for re-embedding. **No vector column or embedding code exists yet.** |
-| `0007-hybrid-retrieval-and-grounded-answers.md` | Need exact words and paraphrase retrieval → keyword-only/vector-only/scored fusion → PostgreSQL full-text + pgvector with reciprocal-rank fusion and verified citations/abstention → one database and complementary retrieval; evaluation/tuning needed. **M5/M6 future, not implemented.** |
+| `0007-hybrid-retrieval-and-grounded-answers.md` | Need exact words and paraphrase retrieval → keyword-only/vector-only/scored fusion → PostgreSQL full-text + pgvector with reciprocal-rank fusion → one database and complementary retrieval; evaluation/tuning needed. **M5 implemented; M6 evidence presentation is in ADR 0011.** |
 | `0008-v1-product-boundaries.md` | Demonstrate product engineering without uncontrolled scope → add advanced enterprise features now or focused V1 → Owner/Member, verified existing-user membership, areas, text PDFs, later search/Q&A; no OCR/history/version comparison initially → complete path with limited scope; later changes require approval. |
 | `0009-public-portfolio-demo.md` | Portfolio reviewers need a live demo with low recurring cost → local-only, choose cloud now, or evaluate at M8 → publicly accessible demo required in M8; prefer suitable free tier then → keep architecture provider-neutral now; public-demo security/quotas/data handling must be decided later. |
 
@@ -503,12 +506,12 @@ Read these in priority order rather than trying to memorize every file.
 21. **How do you know the tenant constraints work?** API negative tests exercise foreign IDs/roles; the DB also enforces composite FKs. The processing tests attempt an invalid cross-workspace chunk link and expect rejection.
 22. **How would this scale?** First measure queue age and processing duration. Add worker replicas (the lock pattern supports concurrent workers), tune DB indexes/throughput and object storage. Add a separate queue only if measured load or scheduling needs exceed Postgres; do not start with microservices/Kubernetes.
 23. **What limitations remain in testing?** Most API tests use SQLite and test identity overrides; the dedicated PostgreSQL concurrency test and CI migration/test job cover DB-specific behavior. Actual WorkOS and MinIO are not contacted in unit/API tests; local end-to-end has been verified separately.
-24. **What does Alembic `upgrade head` do?** It reads the database's current revision and applies unapplied migration functions in order until 0004, then records head. It does not generate a migration from models automatically or start the app.
+24. **What does Alembic `upgrade head` do?** It reads the database's current revision and applies unapplied migration functions in order through the latest revision, then records head. It does not generate a migration from models automatically or start the app.
 25. **What would you explain as the main trade-off?** Explicit app-enforced tenancy is transparent and testable but every tenant query must preserve workspace scope; composite constraints catch mismatched relationships but are not a substitute for authorization.
 
 ## 20. What to learn next
 
-### Must understand before M5
+### Must understand before M6
 
 - Read `models.py` and draw the tenant/ownership relations from memory.
 - Trace one authenticated route through `get_current_user`, `require_workspace_access`, router, service, and SQL query.
@@ -528,9 +531,9 @@ Read these in priority order rather than trying to memorize every file.
 ### Can learn later
 
 - pgvector indexing and the pinned local embedding model's quality, CPU cost and model-cache lifecycle.
-- PostgreSQL full-text search, hybrid candidate retrieval, reciprocal-rank fusion, citation validation, and abstention (M5/M6 design work).
+- PostgreSQL full-text search, hybrid candidate retrieval, reciprocal-rank fusion, deterministic evidence selection, and retrieval-agreement states (M5/M6).
 - RLS, multiple database/worker replicas, queue replacement, observability, and deployment hardening when an actual need appears.
-- OCR, version comparison, analytics, conversation persistence, and other deferred V2/V3 features only if scope is explicitly revisited.
+- Generative LLMs, OCR, version comparison, analytics, conversation persistence, and other deferred features only if scope is explicitly revisited.
 
 ## Repository differences from the original design
 
@@ -538,11 +541,12 @@ Read these in priority order rather than trying to memorize every file.
 - WorkOS is the implemented identity provider; KnowFlow database memberships remain the authorization authority.
 - M4 uses a durable job row with attempts and lease fields, then stores extracted pages and chunks. The migration backfills existing M3 uploads.
 - Chunk size/overlap were not numeric in the approved design; current configurable provisional defaults are 1,800/240 characters, and chunking is page-local.
-- M5 adds local 384-dimension `intfloat/e5-small-v2` embeddings to each chunk and hybrid search. Token count remains unpopulated. There is no LLM answer generation, RAG, generated citation pipeline, or persisted conversation history.
-- PostgreSQL RLS, Redis/Celery, OCR, persisted conversations, document version comparison, and deployment are not implemented through M5.
+- M5 adds local 384-dimension `intfloat/e5-small-v2` embeddings to each chunk and hybrid search. Token count remains unpopulated.
+- M6 adds a non-generative Ask/evidence endpoint and source-passage interface. It does not synthesize answers, use a generative model, or persist conversations.
+- PostgreSQL RLS, Redis/Celery, OCR, persisted conversations, document version comparison, and deployment are not implemented through M6.
 - Deletion tombstone purge runs opportunistically during document/area operations after successful storage cleanup and retention; there is not a dedicated scheduled cleanup process.
 
-These differences preserve the approved M1–M5 scope. M5 ends at retrieval and does not generate answers.
+These differences preserve the approved M1–M6 scope. Ask KnowFlow returns selected evidence rather than a generated answer.
 
 ## M5 addendum: embeddings and hybrid retrieval
 
@@ -552,12 +556,26 @@ The M4 `process_claim` flow in `backend/app/jobs/worker.py` now extracts pages, 
 
 Migration `backend/migrations/versions/0005_embeddings_retrieval.py` adds `vector(384)`, model/version/dimension metadata and timestamp to `document_chunks`, plus a PostgreSQL GIN index over `to_tsvector('english', text)`. Existing active READY documents are set to UPLOADED and their existing job rows are re-queued; normal worker processing rebuilds page/chunk rows and local embeddings. No model inference runs in an Alembic migration.
 
-`backend/app/search/service.py` independently ranks authorized workspace chunks using PostgreSQL FTS (`websearch_to_tsquery`, `ts_rank_cd`) and pgvector cosine distance. Both SQL queries join chunks to documents and require the requested workspace, `deleted_at IS NULL`, `READY`, and current embedding model/version/dimensions. Optional area IDs are checked in the same workspace. `fuse_rankings` combines 1-based candidate ranks with RRF `1 / (k + rank)`, defaults `k=60`, and deduplicates by chunk ID. Ties use stable document/chunk identifiers. `backend/app/search/router.py` requires internal workspace membership and serves `POST /api/v1/workspaces/{workspace_id}/search` to both roles.
+The [search service](../backend/app/search/service.py) independently ranks authorized workspace chunks using PostgreSQL FTS (`websearch_to_tsquery`, `ts_rank_cd`) and pgvector cosine distance. Both SQL queries join chunks to documents and require the requested workspace, `deleted_at IS NULL`, `READY`, and current embedding model/version/dimensions. Optional area IDs are checked in the same workspace. `fuse_rankings` combines 1-based candidate ranks with RRF `1 / (k + rank)`, defaults `k=60`, and deduplicates by chunk ID. Ties use stable document/chunk identifiers. The [search router](../backend/app/search/router.py) requires internal workspace membership and serves `POST /api/v1/workspaces/{id}/search` to both roles.
 
-Responses contain the source chunk text, document filename/ID, chunk index, inclusive PDF page range, final rank/score, and optional lexical/vector ranks. They never expose raw vectors. `apps/web/src/app/workspaces/[workspaceId]/search/page.tsx` provides the M5 query/results page and uses the existing server-side `apiFetch` BFF; the browser never receives a provider key or access token.
+Responses contain the source chunk text, document filename/ID, chunk index, inclusive PDF page range, final rank/score, and optional lexical/vector ranks. They never expose raw vectors. The M5 [search page](../apps/web/src/app/workspaces/%5BworkspaceId%5D/search/page.tsx) provides the query/results UI and uses the existing server-side `apiFetch` BFF; the browser never receives a provider key or access token.
 
 The PostgreSQL-only integration test is `backend/tests/test_postgres_retrieval.py`; local-provider behavior is covered by `test_embeddings.py`, RRF and tenant route behavior by `test_search.py`, and worker integration/failure by `test_processing.py`. PostgreSQL FTS/vector assertions require migrations applied and `KNOWFLOW_DATABASE_URL` pointing to real pgvector PostgreSQL. Provider unit tests use a fake local model so tests do not require a model download; the sample HR end-to-end evaluation requires the real cached model.
 
+## M6 addendum: evidence-based Ask KnowFlow
+
+M6 adds `AskResponse` and `EvidenceItem` in the [search schemas](../backend/app/search/schemas.py), plus authenticated Ask handling in the [search router](../backend/app/search/router.py). The route checks workspace membership and calls the same `_retrieve_for_workspace` helper used by M5 `/search`. It does not duplicate FTS, vector, or RRF logic from the [search service](../backend/app/search/service.py).
+
+The [evidence module](../backend/app/search/evidence.py) is a deterministic quality layer after retrieval. `extract_passage` uses sentence boundaries, query overlap, answer-type cues, and declarative/question structure to select useful verbatim sentences; it keeps the full chunk when it cannot confidently isolate a passage. It never rewrites or summarizes. `select_evidence` assesses source content before retrieval rank, so an interrogative test/reference passage cannot win best evidence merely by repeating the query. M5 provides FTS rank and actual pgvector cosine similarity internally. M6 uses similarity above `KNOWFLOW_EVIDENCE_MINIMUM_VECTOR_SIMILARITY=0.72` together with an answer-type cue, or FTS support plus lexical overlap/coverage. It recognizes frequency, quantity, timing, and responsible-role cues. Lexical thresholds are `KNOWFLOW_EVIDENCE_MINIMUM_QUERY_TERM_OVERLAP=2` and `KNOWFLOW_EVIDENCE_MINIMUM_QUERY_COVERAGE=0.6`. There is no domain synonym dictionary; semantic paraphrases are handled through M5 E5 retrieval plus answer-type evidence. These thresholds are tunable heuristics, not calibrated probabilities, and the no-LLM implementation can remain ambiguous on some questions.
+
+Passages are deduplicated globally by normalized extracted text and near-duplicate token overlap (`KNOWFLOW_EVIDENCE_DEDUP_JACCARD_THRESHOLD`, default 0.72), plus overlapping chunks from the same document/page. Best evidence is excluded from supporting evidence. Supporting passages must also add source terms, so the configured limit is a maximum. Weak matches have no best/supporting fields and are returned only as `related_evidence`; no evidence returns no cards. These states describe deterministic evidence heuristics, not probabilities. Retrieval rank and RRF details stay out of the standard UI.
+
+Source paths are constructed from authorized retrieval rows and stored page provenance. The user-facing link opens the document detail view at the stored page. The detail page bounds the page to the PDF page count and sets the PDF viewer fragment. Its existing Next.js content route forwards the short-lived token to FastAPI, which rechecks membership and document ownership before streaming. A source URL alone never grants access. Evidence from multiple authorized documents stays separate with each source's own page; KnowFlow does not reconcile conflicting policy statements into a synthetic rule.
+
+The [SearchForm component](../apps/web/src/app/workspaces/%5BworkspaceId%5D/search/SearchForm.tsx) renders Ask KnowFlow, best matching evidence, supporting passages, and source/page metadata. It intentionally omits engineering ranks and scores. The authenticated BFF is the [Ask route](../apps/web/src/app/api/workspaces/%5BworkspaceId%5D/ask/route.ts). M5 `/search` remains available for retrieval diagnostics.
+
+The evidence tests cover sentence selection, verbatim preservation, deduplication, HR cases, and blind generalization cases drawn from the information-security sample. Search tests cover Owner/Member access, tenant denial, input validation and provider failure. The PostgreSQL integration test checks M5 candidate ranks, internal cosine similarity, FTS/pgvector filtering, and HR page provenance when run against a configured database. No application path invokes a generative model.
+
 ### KnowFlow Portfolio Zero-Charge Constraint
 
-The default portfolio implementation must not depend on usage-billed AI inference APIs. Core document processing, embeddings, retrieval and future Q&A must be capable of running without paid AI API calls. WorkOS authentication remains the approved identity service. M6 is not implemented; its design must favor local/no-charge inference and cannot add a paid LLM provider without explicit owner approval. See [ADR 0010](adr/0010-embedding-provider-and-model.md).
+The default portfolio implementation must not depend on usage-billed AI inference APIs. Core document processing, embeddings, retrieval and evidence Q&A run without paid AI API calls. WorkOS authentication remains the approved identity service. V1 contains no generative model; any future generation adapter requires an explicit scope decision. See [ADR 0010](adr/0010-embedding-provider-and-model.md) and [ADR 0011](adr/0011-evidence-based-qa-without-generative-llm.md).

@@ -19,10 +19,12 @@ type KnowledgeArea = { id: string; name: string };
 
 export default async function DocumentDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ workspaceId: string; documentId: string }>;
+  searchParams: Promise<{ page?: string }>;
 }) {
-  const { workspaceId, documentId } = await params;
+  const [{ workspaceId, documentId }, query] = await Promise.all([params, searchParams]);
   const workspacePath = `/workspaces/${encodeURIComponent(workspaceId)}`;
   const documentPath = `${workspacePath}/documents/${encodeURIComponent(documentId)}`;
   const [workspaceResponse, documentResponse, areaResponse] = await Promise.all([
@@ -37,6 +39,10 @@ export default async function DocumentDetailPage({
   const areas = (await areaResponse.json()) as KnowledgeArea[];
   const area = areas.find((item) => item.id === document.knowledge_area_id);
   const contentPath = `/api${documentPath}/content`;
+  const requestedPage = Number(query.page);
+  const page = Number.isInteger(requestedPage) && requestedPage > 0
+    ? Math.min(requestedPage, document.page_count)
+    : null;
 
   return (
     <main className="app-shell">
@@ -52,7 +58,7 @@ export default async function DocumentDetailPage({
         {document.processing_error_message ? <p className="notice notice-error" role="status">{document.processing_error_message}</p> : null}
         <section className="panel viewer-panel" aria-label="PDF document">
           <div className="viewer-toolbar"><span>Private workspace document</span><div className="document-actions"><a className="button button-secondary" href={`${contentPath}?download=true`}>Download PDF</a>{workspace.role === "OWNER" ? <form action={deleteDocument}><input type="hidden" name="workspace_id" value={workspaceId} /><input type="hidden" name="document_id" value={document.id} /><button className="button button-danger" type="submit">Delete document</button></form> : null}</div></div>
-          <iframe className="pdf-frame" title={document.original_filename} src={contentPath} />
+          <iframe className="pdf-frame" title={document.original_filename} src={page ? `${contentPath}#page=${page}` : contentPath} />
         </section>
       </div>
     </main>

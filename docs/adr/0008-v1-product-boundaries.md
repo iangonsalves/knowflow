@@ -8,7 +8,7 @@ The project should demonstrate practical full-stack/backend engineering and focu
 
 ## Decision
 
-V1 supports Owner and Member, existing registered and verified WorkOS-user membership only, knowledge areas, text-based PDFs without OCR, document upload/search/Q&A with page/snippet citations, and no persisted conversation history. Owners manage content and membership; Members can view/download authorized sources and ask/search. Non-empty areas cannot be deleted.
+V1 supports Owner and Member, existing registered and verified WorkOS-user membership only, knowledge areas, text-based PDFs without OCR, document upload/search, evidence-based Ask KnowFlow with verbatim page-aware source passages, and no persisted conversation history. Owners manage content and membership; Members can view/download authorized sources and ask/search. Non-empty areas cannot be deleted. V1 uses no generative LLM; see ADR 0011.
 
 ## Alternatives
 

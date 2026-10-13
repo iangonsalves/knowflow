@@ -8,7 +8,7 @@ from sqlalchemy.schema import CreateIndex
 
 from app.db.models import Document, DocumentChunk, DocumentStatus
 from app.embeddings.provider import EmbeddingSet
-from app.search.schemas import SearchRequest
+from app.search.schemas import SearchRequest, SearchResult
 from app.search.service import RankedChunk, fuse_rankings
 from app.tenancy.policies import require_workspace_access
 
@@ -100,6 +100,29 @@ def test_search_request_rejects_blank_and_oversized_query() -> None:
         SearchRequest(query="x" * 10_001)
 
 
+def test_internal_retrieval_signals_are_not_exposed_in_search_response() -> None:
+    result = SearchResult(
+        chunk_id=uuid4(),
+        document_id=uuid4(),
+        document_filename="policy.pdf",
+        chunk_index=0,
+        text="A source passage.",
+        page_start=1,
+        page_end=1,
+        rank=1,
+        rrf_score=0.02,
+        keyword_rank=1,
+        vector_rank=1,
+        keyword_score=0.4,
+        vector_similarity=0.85,
+    )
+
+    response = result.model_dump()
+
+    assert "keyword_score" not in response
+    assert "vector_similarity" not in response
+
+
 def test_search_requires_workspace_membership(client, identities, db_session) -> None:
     assert require_workspace_access(db_session, identities.owner, identities.workspace.id)
     with pytest.raises(HTTPException) as error:
@@ -142,3 +165,92 @@ def test_owner_and_member_can_call_search_but_foreign_workspace_is_hidden(
         ).status_code
         == 404
     )
+
+
+def test_ask_requires_workspace_membership_and_accepts_owner_member(
+    client, identities, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.search.router.get_embedding_provider", lambda _settings: FakeProvider()
+    )
+    monkeypatch.setattr("app.search.router.retrieve", lambda *_args, **_kwargs: [])
+    url = f"/api/v1/workspaces/{identities.workspace.id}/ask"
+    request = {"query": "How much annual leave do employees receive?"}
+
+    owner = client.post(url, headers={"Authorization": "Bearer workos_owner_sub"}, json=request)
+    member = client.post(url, headers={"Authorization": "Bearer workos_member_sub"}, json=request)
+    outsider = client.post(
+        f"/api/v1/workspaces/{identities.other.id}/ask",
+        headers={"Authorization": "Bearer workos_member_sub"},
+        json=request,
+    )
+
+    assert owner.status_code == member.status_code == 200
+    assert owner.json()["evidence_state"] == "no_evidence"
+    assert owner.json()["best_evidence"] is None
+    assert owner.json()["supporting_evidence"] == []
+    assert owner.json()["related_evidence"] == []
+    assert "generated_answer" not in owner.json()
+    assert outsider.status_code == 404
+
+
+def test_ask_labels_unrelated_shared_term_as_weak_related_evidence(
+    client, identities, monkeypatch
+):
+    row = SearchResult(
+        chunk_id=uuid4(),
+        document_id=uuid4(),
+        document_filename="Annual Leave Policy.pdf",
+        chunk_index=0,
+        text="Full-time employees receive 25 working days of paid annual leave each year.",
+        page_start=2,
+        page_end=2,
+        rank=1,
+        rrf_score=0.02,
+        keyword_rank=1,
+        vector_rank=1,
+    )
+    monkeypatch.setattr(
+        "app.search.router.get_embedding_provider", lambda _settings: FakeProvider()
+    )
+    monkeypatch.setattr("app.search.router.retrieve", lambda *_args, **_kwargs: [row])
+    response = client.post(
+        f"/api/v1/workspaces/{identities.workspace.id}/ask",
+        headers={"Authorization": "Bearer workos_owner_sub"},
+        json={"query": "What is the maternity leave entitlement?"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["evidence_state"] == "weak_evidence"
+    assert body["best_evidence"] is None
+    assert body["supporting_evidence"] == []
+    assert len(body["related_evidence"]) == 1
+    assert "may be related" in body["message"]
+    assert "25 working days" in body["related_evidence"][0]["text"]
+
+
+def test_ask_rejects_blank_and_too_long_questions(client, identities):
+    url = f"/api/v1/workspaces/{identities.workspace.id}/ask"
+    headers = {"Authorization": "Bearer workos_owner_sub"}
+    assert client.post(url, headers=headers, json={"query": "   "}).status_code == 422
+    too_long = client.post(url, headers=headers, json={"query": "x" * 2_001})
+    assert too_long.status_code == 422
+
+
+def test_ask_returns_safe_message_when_retrieval_provider_fails(client, identities, monkeypatch):
+    from app.embeddings.provider import EmbeddingConfigurationError
+
+    def fail_provider(_settings):
+        raise EmbeddingConfigurationError
+
+    monkeypatch.setattr("app.search.router.get_embedding_provider", fail_provider)
+    response = client.post(
+        f"/api/v1/workspaces/{identities.workspace.id}/ask",
+        headers={"Authorization": "Bearer workos_owner_sub"},
+        json={"query": "How much annual leave?"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["message"]
+    assert "generated_answer" not in response.json()
