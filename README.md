@@ -4,7 +4,7 @@ KnowFlow is a workspace-based business knowledge platform. Its approved product 
 
 ## Current milestone
 
-M1–M5 are approved. M6 adds evidence-based Q&A using the existing local embedding, PostgreSQL FTS, pgvector and RRF retrieval. It does not generate or paraphrase answers and does not use a generative model. WorkOS authentication remains unchanged.
+M1–M6 are approved and frozen. M7 polishes the authenticated workspace experience and hardens user-facing states without changing backend, retrieval, or evidence behavior. Ask KnowFlow presents retrieved source passages; it does not generate or paraphrase answers. WorkOS authentication remains unchanged. M8 deployment/release has not started.
 
 ## Requirements
 
@@ -57,6 +57,12 @@ The local services are:
 - Document worker: the `worker` Compose service, using the same backend image/code as the API.
 - Workspace search: `POST /api/v1/workspaces/{id}/search`, available to Owners and Members. It remains the M5 ranked retrieval API.
 - Ask KnowFlow: `POST /api/v1/workspaces/{id}/ask`, available to Owners and Members. Returns best and supporting verbatim evidence, an evidence state and source/page links. It makes no generative AI call.
+
+The authenticated web app uses a shared workspace shell with Overview, Ask KnowFlow, Knowledge areas, Documents, and Members navigation. Member-management controls are shown only to Owners; FastAPI continues to enforce each operation. The overview summarizes existing area/document/status data without a new analytics service. Document status can be refreshed from the library while processing. Source links remain protected through the Next.js-to-FastAPI streaming route.
+
+Temporary backend/network failures are shown through generic retryable UI states; inaccessible workspace resources continue to return a not-found page. Browser-facing error messages do not include internal exception details.
+
+M7 local frontend checks include `cd apps/web && npm test`, which runs the dependency-free Node test suite for Owner/Member UI capabilities, document status labels, and safe Ask error messages. See [the engineering guide](docs/KNOWFLOW_ENGINEERING_GUIDE.md) for the M1–M7 route structure and interaction details.
 
 Uploads create a `PROCESS_DOCUMENT` job in the same PostgreSQL transaction as document metadata. Job states are `QUEUED`, `RUNNING`, `RETRYABLE_FAILURE`, `PERMANENT_FAILURE`, `SUCCEEDED`, and `CANCELLED`; document states are `UPLOADED`, `PROCESSING`, `READY`, `FAILED`, and `DELETING`. The worker extracts text per page, normalizes it, creates deterministic overlapping chunks, generates local embeddings and commits pages, embedded chunks, `READY`, and `SUCCEEDED` atomically. Empty/scanned or malformed PDFs fail without OCR. A deleted document's queued/running work is cancelled and derived rows are removed.
 
@@ -112,6 +118,7 @@ docker compose run --rm api pytest tests/test_postgres_retrieval.py tests/test_p
 docker compose run --rm api alembic check
 docker compose run --rm web npm run lint
 docker compose run --rm web npm run typecheck
+docker compose run --rm web npm test
 docker compose run --rm web npm run build
 ```
 

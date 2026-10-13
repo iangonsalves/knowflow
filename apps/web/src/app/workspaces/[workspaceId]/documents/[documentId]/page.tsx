@@ -1,8 +1,9 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
-
-import { deleteDocument, signOutAction } from "@/app/actions";
+import { deleteDocument } from "@/app/actions";
+import ConfirmSubmit from "@/app/components/ConfirmSubmit";
 import { apiFetch } from "@/lib/api";
+import { getDocumentStatusLabel, getWorkspaceCapabilities } from "@/lib/ui-helpers.mjs";
+import { requireApiSuccess } from "@/lib/require-api-success";
 
 type Workspace = { name: string; role: "OWNER" | "MEMBER" };
 type Document = {
@@ -32,11 +33,13 @@ export default async function DocumentDetailPage({
     apiFetch(documentPath),
     apiFetch(`${workspacePath}/knowledge-areas`),
   ]);
-  if (workspaceResponse.status === 404 || documentResponse.status === 404) notFound();
-  if (!workspaceResponse.ok || !documentResponse.ok || !areaResponse.ok) notFound();
+  requireApiSuccess(workspaceResponse);
+  requireApiSuccess(documentResponse);
+  requireApiSuccess(areaResponse);
   const workspace = (await workspaceResponse.json()) as Workspace;
   const document = (await documentResponse.json()) as Document;
   const areas = (await areaResponse.json()) as KnowledgeArea[];
+  const { canManageDocuments } = getWorkspaceCapabilities(workspace.role);
   const area = areas.find((item) => item.id === document.knowledge_area_id);
   const contentPath = `/api${documentPath}/content`;
   const requestedPage = Number(query.page);
@@ -45,22 +48,17 @@ export default async function DocumentDetailPage({
     : null;
 
   return (
-    <main className="app-shell">
-      <header className="topbar">
-        <Link className="brand" href="/workspaces">KnowFlow</Link>
-        <div className="user-menu"><span>{workspace.role === "OWNER" ? "Owner" : "Member"}</span><form action={signOutAction}><button className="button button-quiet" type="submit">Sign out</button></form></div>
-      </header>
-      <div className="content-wrap content-wide">
+    <div className="page-content page-content-wide">
         <Link className="back-link" href={`${workspacePath}/documents`}>← All documents</Link>
         <p className="eyebrow">{area?.name ?? "Document"}</p>
         <h1 className="page-title document-detail-title">{document.original_filename}</h1>
-        <p className="page-intro">{document.page_count} pages · {(document.byte_size / (1024 * 1024)).toFixed(2)} MiB · {document.status}</p>
+        <p className="page-intro">{document.page_count} pages · {(document.byte_size / (1024 * 1024)).toFixed(2)} MiB · <span className={`status-pill status-${document.status.toLowerCase()}`}>{getDocumentStatusLabel(document.status)}</span></p>
+        {["UPLOADED", "PROCESSING"].includes(document.status) ? <p className="notice notice-neutral">This document is being processed and will become searchable when it is Ready.</p> : null}
         {document.processing_error_message ? <p className="notice notice-error" role="status">{document.processing_error_message}</p> : null}
         <section className="panel viewer-panel" aria-label="PDF document">
-          <div className="viewer-toolbar"><span>Private workspace document</span><div className="document-actions"><a className="button button-secondary" href={`${contentPath}?download=true`}>Download PDF</a>{workspace.role === "OWNER" ? <form action={deleteDocument}><input type="hidden" name="workspace_id" value={workspaceId} /><input type="hidden" name="document_id" value={document.id} /><button className="button button-danger" type="submit">Delete document</button></form> : null}</div></div>
+          <div className="viewer-toolbar"><span>Private workspace document{page ? ` · Page ${page}` : ""}</span><div className="document-actions"><a className="button button-secondary" href={`${contentPath}?download=true`}>Download PDF</a>{canManageDocuments ? <form action={deleteDocument}><input type="hidden" name="workspace_id" value={workspaceId} /><input type="hidden" name="document_id" value={document.id} /><ConfirmSubmit label="Delete document" confirmation={`Delete ${document.original_filename}? Access is revoked immediately.`} danger className="button button-danger" /></form> : null}</div></div>
           <iframe className="pdf-frame" title={document.original_filename} src={page ? `${contentPath}#page=${page}` : contentPath} />
         </section>
-      </div>
-    </main>
+    </div>
   );
 }

@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "KnowFlow",
-  description: "KnowFlow workspace identity and access",
+  description: "Find source-grounded evidence across your workspace knowledge",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

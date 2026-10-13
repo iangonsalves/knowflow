@@ -2,6 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import Link from "next/link";
+import { safeAskErrorMessage } from "@/lib/ui-helpers.mjs";
 
 type EvidenceItem = {
   chunk_id: string;
@@ -23,7 +24,7 @@ type AskResponse = {
   related_evidence: EvidenceItem[];
 };
 
-export default function SearchForm({ workspaceId }: { workspaceId: string }) {
+export default function SearchForm({ workspaceId, hasReadyDocuments }: { workspaceId: string; hasReadyDocuments: boolean }) {
   const [question, setQuestion] = useState("");
   const [response, setResponse] = useState<AskResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -51,7 +52,7 @@ export default function SearchForm({ workspaceId }: { workspaceId: string }) {
         error?: { message?: string };
       };
       if (!result.ok) {
-        setError(body.error?.message ?? body.message ?? "Your question could not be processed.");
+        setError(safeAskErrorMessage(result.status));
         return;
       }
       setResponse(body);
@@ -80,8 +81,9 @@ export default function SearchForm({ workspaceId }: { workspaceId: string }) {
 
   return (
     <>
-      <section className="panel" aria-labelledby="ask-title">
-        <form onSubmit={submit} className="search-form">
+      <section className="panel ask-panel" aria-labelledby="ask-title">
+        <form onSubmit={submit} className="search-form" aria-busy={loading}>
+          <h2 id="ask-title">What would you like to know?</h2>
           <label className="field-label" htmlFor="ask-question">Your question</label>
           <div className="input-row">
             <input
@@ -92,18 +94,21 @@ export default function SearchForm({ workspaceId }: { workspaceId: string }) {
               required
               value={question}
               onChange={(event) => setQuestion(event.currentTarget.value)}
-              placeholder="How much vacation time do staff get?"
+              placeholder="Ask about a policy, process, or requirement…"
+              aria-describedby="ask-help ask-count"
             />
             <button className="button button-primary" type="submit" disabled={loading || !question.trim()}>
               {loading ? "Finding evidence…" : "Ask KnowFlow"}
             </button>
           </div>
-          <p className="workspace-meta">KnowFlow finds relevant passages from this workspace's documents. It does not generate or paraphrase answers.</p>
+          <div className="ask-helper-row"><p id="ask-help" className="workspace-meta">KnowFlow retrieves source passages. It does not generate or paraphrase answers.</p><span id="ask-count" className="workspace-meta">{question.length}/2000</span></div>
         </form>
       </section>
 
+      {!response && !loading && hasReadyDocuments ? <section className="example-prompts" aria-label="Example questions"><p className="workspace-meta">Try a question such as</p><ul><li>What does our policy say about remote access?</li><li>When should incidents be reported?</li><li>What approvals are required?</li></ul></section> : null}
+
       {error ? <p className="notice notice-error" role="alert">{error}</p> : null}
-      {response ? <section className="panel" aria-live="polite" aria-labelledby="evidence-title">
+      {response ? <section className="panel evidence-results" aria-live="polite" aria-labelledby="evidence-title">
         <div className="panel-heading">
           <div>
             <p className="eyebrow">Question</p>

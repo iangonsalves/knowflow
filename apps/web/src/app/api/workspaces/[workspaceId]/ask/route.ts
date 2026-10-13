@@ -13,23 +13,27 @@ export async function POST(
   }
 
   const { workspaceId } = await params;
-  const upstream = await fetch(
-    `${apiBaseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/ask`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+  try {
+    const upstream = await fetch(
+      `${apiBaseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/ask`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: await request.text(),
+        cache: "no-store",
       },
-      body: await request.text(),
-      cache: "no-store",
-    },
-  );
-  return new NextResponse(upstream.body, {
-    status: upstream.status,
-    headers: {
-      "Content-Type": upstream.headers.get("content-type") ?? "application/json",
-      "Cache-Control": "no-store",
-    },
-  });
+    );
+    return new NextResponse(upstream.body, {
+      status: upstream.status,
+      headers: {
+        "Content-Type": upstream.headers.get("content-type") ?? "application/json",
+        "Cache-Control": "no-store",
+      },
+    });
+  } catch {
+    return NextResponse.json({ message: "Ask KnowFlow is temporarily unavailable. Try again shortly." }, { status: 503 });
+  }
 }

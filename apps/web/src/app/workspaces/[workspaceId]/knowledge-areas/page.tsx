@@ -1,13 +1,14 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
-
 import {
   createKnowledgeArea,
   deleteKnowledgeArea,
-  signOutAction,
   updateKnowledgeArea,
 } from "@/app/actions";
+import ConfirmSubmit from "@/app/components/ConfirmSubmit";
+import PendingSubmitButton from "@/app/components/PendingSubmitButton";
 import { apiFetch } from "@/lib/api";
+import { getWorkspaceCapabilities } from "@/lib/ui-helpers.mjs";
+import { requireApiSuccess } from "@/lib/require-api-success";
 
 type Workspace = { id: string; name: string; role: "OWNER" | "MEMBER" };
 type KnowledgeArea = {
@@ -27,29 +28,19 @@ export default async function KnowledgeAreasPage({
   const [{ workspaceId }, { error }] = await Promise.all([params, searchParams]);
   const workspacePath = `/workspaces/${encodeURIComponent(workspaceId)}`;
   const workspaceResponse = await apiFetch(workspacePath);
-  if (!workspaceResponse.ok) notFound();
+  requireApiSuccess(workspaceResponse);
   const workspace = (await workspaceResponse.json()) as Workspace;
   const areaResponse = await apiFetch(`${workspacePath}/knowledge-areas`);
-  if (!areaResponse.ok) notFound();
+  requireApiSuccess(areaResponse);
   const areas = (await areaResponse.json()) as KnowledgeArea[];
-  const isOwner = workspace.role === "OWNER";
+  const { canManageKnowledgeAreas: isOwner } = getWorkspaceCapabilities(workspace.role);
 
   return (
-    <main className="app-shell">
-      <header className="topbar">
-        <Link className="brand" href="/workspaces">KnowFlow</Link>
-        <div className="user-menu"><span>{workspace.role === "OWNER" ? "Owner" : "Member"}</span><form action={signOutAction}><button className="button button-quiet" type="submit">Sign out</button></form></div>
-      </header>
-      <div className="content-wrap">
-        <Link className="back-link" href={workspacePath}>← {workspace.name}</Link>
+    <div className="page-content">
         <p className="eyebrow">Workspace structure</p>
         <h1 className="page-title">Knowledge areas</h1>
         <p className="page-intro">Group documents by the teams and topics that use them.</p>
         {error ? <p className="notice notice-error" role="alert">{error}</p> : null}
-        <nav className="section-nav" aria-label="Workspace sections">
-          <Link className="button button-secondary" href={`${workspacePath}/documents`}>Documents</Link>
-          <Link className="button button-secondary" href={workspacePath}>Members &amp; settings</Link>
-        </nav>
         {isOwner ? (
           <section className="panel" aria-labelledby="create-area-title">
             <div className="panel-heading"><div><h2 id="create-area-title">Create an area</h2><p>Area names must be unique within this workspace.</p></div></div>
@@ -59,7 +50,7 @@ export default async function KnowledgeAreasPage({
               <input id="area-name" name="name" minLength={1} maxLength={120} required placeholder="Human Resources" />
               <label className="field-label" htmlFor="area-description">Description <span className="optional-label">(optional)</span></label>
               <textarea id="area-description" name="description" maxLength={500} rows={2} placeholder="Policies and employee guidance" />
-              <div><button className="button button-primary" type="submit">Create area</button></div>
+              <div><PendingSubmitButton label="Create area" pendingLabel="Creating…" /></div>
             </form>
           </section>
         ) : null}
@@ -85,7 +76,7 @@ export default async function KnowledgeAreasPage({
                   <form action={deleteKnowledgeArea}>
                     <input type="hidden" name="workspace_id" value={workspaceId} />
                     <input type="hidden" name="area_id" value={area.id} />
-                    <button className="text-button text-danger" type="submit">Delete area</button>
+                    <ConfirmSubmit label="Delete area" confirmation={`Delete ${area.name}? Only empty areas can be deleted.`} danger />
                   </form>
                 </div> : null}
               </li>
@@ -93,7 +84,6 @@ export default async function KnowledgeAreasPage({
           </ul> : <p className="empty-state">No knowledge areas yet.</p>}
           {!isOwner ? <p className="member-note">Only an Owner can create or change knowledge areas.</p> : null}
         </section>
-      </div>
-    </main>
+    </div>
   );
 }
