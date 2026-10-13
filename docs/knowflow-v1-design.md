@@ -209,16 +209,18 @@ Worker design: modest polling/backoff; one job at a time initially; graceful shu
 
 Split normalized page text into bounded chunks, preferring paragraph/sentence boundaries. Keep chunk index, inclusive page range, content hash and document provenance. Overlap helps boundary recall but duplicates text; retrieval deduplicates adjacent chunks. Chunk size, overlap and tokenizer must be selected through the evaluation set. **V1 recommendation:** store the vector directly on `document_chunks`, with `embedding_model` and `embedding_version`. This avoids an extra join for one active vector per chunk. A separate table is justified only for concurrent models, staged re-embedding or independent vector retention.
 
-Use one embedding/LLM provider behind separate provider interfaces for V1. Choose the vendor before retrieval implementation based on data handling, region, price, rate limits, vector dimensions, context length, structured output and development credentials. Separate vendors are deferred unless one provider cannot meet a requirement.
+Use a replaceable embedding interface and keep embedding separate from any future answer-generation runtime. M5 uses the local pretrained Sentence Transformers-compatible `intfloat/e5-small-v2` model, stored as 384-dimensional vectors; see ADR 0010. KnowFlow Portfolio Zero-Charge Constraint: core document processing, embeddings, retrieval and future Q&A must run without usage-billed AI inference APIs. External paid AI providers require explicit approval. WorkOS authentication remains unchanged.
 
 ### Retrieval
 
 1. PostgreSQL full-text search over chunks for exact terms, names, acronyms and numbers, filtered to the authorized workspace and READY documents.
 2. Embed the question with the same model and query pgvector under the same filters.
 3. Fuse candidate lists with reciprocal-rank fusion (RRF). This is the V1 decision because raw keyword/vector score scales are not directly comparable and rank fusion is explainable.
-4. Deduplicate adjacent chunks and cap per-document contribution; bound top-K context.
+4. Deduplicate chunks returned by both lists and cap the final result count using the configured top-K. Each result preserves chunk/document identifiers and inclusive source page range.
 
-Use Postgres full-text indexes. Exact vector scan may suffice for a small corpus; add approximate vector index only when measured latency/size needs it. Select operator/index after provider and deployment compatibility are known.
+M5 uses PostgreSQL `websearch_to_tsquery('english', ...)`, `ts_rank_cd` and a GIN index over `to_tsvector('english', text)`. Semantic ranking uses pgvector cosine distance. Exact vector scan is adequate for the current small corpus; add an approximate vector index only when measured latency/size needs it. M5 defaults are 30 candidates per source, RRF `k=60`, and six final results; settings can tune these values.
+
+The embedding model and 384-dimension column are pinned. M5 migration requeues prior active READY documents using their existing durable processing job; they are temporarily UPLOADED and become READY only after vectors and text are atomically saved. A model/version/dimension change requires a controlled re-embedding rollout. The pretrained model downloads once and is cached in a persistent Docker volume; no inference API is called. M6 must be designed around local/no-charge inference and must not automatically introduce a paid LLM API.
 
 ### Generation and safeguards
 
@@ -349,14 +351,14 @@ These are proposed starting points for a small portfolio deployment, not univers
 | `KEYWORD_CANDIDATES` | 30 | Broad lexical pool at low PostgreSQL cost before RRF. |
 | `VECTOR_CANDIDATES` | 30 | Comparable semantic candidate pool; tune using evaluation set. |
 | `RETRIEVAL_TOP_K` | 6 chunks | Limits noise/context; initially cap at 2 chunks per document. |
-| `MAX_CONTEXT_TOKENS` | 6,000 | Bounds cost/latency independent of model provider's larger limits. |
+| `MAX_CONTEXT_TOKENS` | 6,000 | Bounds local inference memory/latency independent of a runtime's larger limits. |
 | `PROCESSING_JOB_TIMEOUT_SECONDS` | 600 | Allows a 250-page text PDF and batched embeddings under normal conditions. |
 | `WORKER_MAX_ATTEMPTS` | 4 total | Initial attempt plus 3 retries; permanent errors are not retried. Manual retry resets the same job's attempt budget. |
 | `WORKER_RETRY_BACKOFF_SECONDS` | 30, 120, 600 | Bounded backoff with jitter avoids repeated immediate provider calls. |
 | `CLEANUP_RETRY_WINDOW_HOURS` | 24 | Continue transient object/derived-data cleanup retries for one day before operator attention; keep tombstone/access revocation in place. |
 | `TOMBSTONE_RETENTION_DAYS` | 7 after cleanup succeeds | Short recovery window for verifying cleanup and handling support issues, then purge metadata. |
 | `JOB_LEASE_SECONDS` | 90; heartbeat 30 | Allows recovery after worker death; heartbeat should renew before expiry. |
-| `RATE_LIMIT_QUESTIONS_PER_USER` | 20/minute, burst 5 | Bounds LLM cost while allowing normal interactive use. |
+| `RATE_LIMIT_QUESTIONS_PER_USER` | 20/minute, burst 5 | Bounds local inference/compute use and abuse while allowing normal interactive use. |
 | `RATE_LIMIT_UPLOADS_PER_OWNER` | 10/hour and 100 MiB/hour | Reduces storage/worker abuse in addition to per-file cap. |
 | `RATE_LIMIT_AUTH_FAILURES` | Provider-managed; app fallback 10/IP/5 min | Prefer identity provider controls; avoid conflicting layers. |
 | `MAX_SEARCH_RESULTS` | 20; page size 10 | Keeps response and UI bounded. |
@@ -400,10 +402,10 @@ At every milestone, update docs, preserve green tests, review migration impact a
 
 | Decision | Alternatives | Recommendation | Trade-off / input needed |
 |---|---|---|---|
-| Model provider | One vendor for embeddings and LLM; separate vendors | One provider behind interfaces | Choose before retrieval work based on residency, cost, dimensions, context, structured output and credentials. |
+| Model provider | Paid hosted inference vs local pretrained inference | Local pretrained embeddings for M5; local/no-charge inference is required for M6 design | Avoids usage charges; model download/cache and CPU/memory are operator responsibilities. Any paid provider needs explicit owner approval. |
 | Deployment services | Free-tier hosting/storage/database vs paid managed services | Evaluate at M8 | Public live demo is required; favor suitable free tiers and avoid recurring cost where practical. Do not redesign V1 around a provider now. |
 
-The following are now approved: WorkOS AuthKit; app-owned workspace membership and Owner/Member authorization; the configurable defaults in Section 14; single-instance appropriate rate limiting without Redis; authorized API streaming; existing registered user membership only; Member document view/download; Owner-only management; rejection of non-empty area deletion; no history/OCR; RRF; vector on chunk; one durable job row; no RLS; MinIO with volume fallback; Azure Blob if Azure is selected; and simple citation snippets/page links. The provider for embeddings and LLM will be proposed for approval before M5. The public live demo requirement is recorded for M8; hosting choices will be evaluated then without reshaping the architecture now. See [the ADR set](adr/).
+The following are now approved: WorkOS AuthKit; app-owned workspace membership and Owner/Member authorization; the configurable defaults in Section 14; single-instance appropriate rate limiting without Redis; authorized API streaming; existing registered user membership only; Member document view/download; Owner-only management; rejection of non-empty area deletion; no history/OCR; RRF; vector on chunk; one durable job row; no RLS; MinIO with volume fallback; Azure Blob if Azure is selected; and simple citation snippets/page links. M5 uses the local model pinned in ADR 0010. Future answer generation must honor the KnowFlow Portfolio Zero-Charge Constraint; this does not authorize starting M6. The public live demo requirement is recorded for M8; hosting choices will be evaluated then without reshaping the architecture now. See [the ADR set](adr/).
 
 ## ADR index
 
@@ -421,4 +423,4 @@ The following are now approved: WorkOS AuthKit; app-owned workspace membership a
 
 ## Approval gate
 
-The detailed design baseline and the decisions above are approved. The model provider remains for approval before M5. The approved blueprint remains the scope authority; any V2/V3 expansion will be discussed first.
+The detailed design baseline and the decisions above are approved. The local M5 model is pinned in ADR 0010; M5 remains unapproved until its required real local retrieval verification is complete. The approved blueprint remains the scope authority; any V2/V3 expansion will be discussed first.

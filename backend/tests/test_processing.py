@@ -20,6 +20,7 @@ from app.db.models import (
     ProcessingJobStatus,
 )
 from app.documents.storage import ObjectStorageError, StoredObjectNotFound
+from app.embeddings.provider import EmbeddingSet, EmbeddingTransientError
 from app.jobs.service import claim_next_job, record_failure
 from app.jobs.worker import process_claim
 from app.processing.chunking import PreparedChunk, chunk_pages
@@ -34,7 +35,7 @@ from app.processing.extraction import (
     extract_pdf_pages,
     normalize_page_text,
 )
-from app.processing.persistence import persist_processed_output
+from app.processing.persistence import EmbeddedChunk, persist_processed_output
 
 
 class MemoryStorage:
@@ -52,6 +53,22 @@ class MemoryStorage:
 
     def delete_file(self, *_args, **_kwargs) -> None:
         raise NotImplementedError
+
+
+class DeterministicEmbeddingProvider:
+    def __init__(self, dimensions: int = 384) -> None:
+        self.dimensions = dimensions
+
+    def embed(self, texts: list[str], *, purpose: str, progress=None) -> EmbeddingSet:
+        base = [0.0] * self.dimensions
+        if texts:
+            base[0] = 1.0 if purpose == "query" else 0.8
+        return EmbeddingSet(
+            "intfloat/e5-small-v2@ffb93f3bd4047442299a41ebb6fa998a38507c52",
+            "v1",
+            self.dimensions,
+            [base[:] for _ in texts],
+        )
 
 
 def source_document(pdf: bytes, *, page_count: int = 1):
@@ -202,12 +219,15 @@ def test_worker_persists_ordered_page_chunks_and_ready_atomically(db_session, id
         worker_retry_backoff_seconds=[30, 120, 600],
         chunk_size_chars=32,
         chunk_overlap_chars=6,
+        embedding_model_identifier="intfloat/e5-small-v2@ffb93f3bd4047442299a41ebb6fa998a38507c52",
+        embedding_version="v1",
+        embedding_dimensions=384,
     )
     claim = claim_next_job(db_session, "test-worker", settings)
     assert claim is not None
     session_factory = sessionmaker(bind=db_session.get_bind(), expire_on_commit=False)
 
-    process_claim(session_factory, storage, settings, claim)
+    process_claim(session_factory, storage, settings, claim, DeterministicEmbeddingProvider())
     db_session.expire_all()
 
     assert db_session.get(Document, document_id).status == DocumentStatus.READY
@@ -228,11 +248,19 @@ def test_worker_persists_ordered_page_chunks_and_ready_atomically(db_session, id
     assert [chunk.chunk_index for chunk in chunks] == list(range(len(chunks)))
     assert all(chunk.workspace_id == identities.workspace.id for chunk in chunks)
     assert all(chunk.page_start <= chunk.page_end for chunk in chunks)
+    assert all(len(chunk.embedding) == 384 for chunk in chunks)
+    assert all(
+        chunk.embedding_model
+        == "intfloat/e5-small-v2@ffb93f3bd4047442299a41ebb6fa998a38507c52"
+        for chunk in chunks
+    )
+    assert all(chunk.embedding_version == "v1" for chunk in chunks)
+    assert all(chunk.embedded_at is not None for chunk in chunks)
 
     # A stale duplicate delivery cannot replace completed data or duplicate rows.
     page_count = len(pages)
     chunk_count = len(chunks)
-    process_claim(session_factory, storage, settings, claim)
+    process_claim(session_factory, storage, settings, claim, DeterministicEmbeddingProvider())
     assert (
         len(
             db_session.scalars(
@@ -290,11 +318,14 @@ def test_no_text_pdf_fails_cleanly_without_page_or_chunk_output(db_session, iden
         worker_retry_backoff_seconds=[30, 120, 600],
         chunk_size_chars=100,
         chunk_overlap_chars=10,
+        embedding_model_identifier="intfloat/e5-small-v2@ffb93f3bd4047442299a41ebb6fa998a38507c52",
+        embedding_version="v1",
+        embedding_dimensions=384,
     )
     claim = claim_next_job(db_session, "test-worker", settings)
     session_factory = sessionmaker(bind=db_session.get_bind(), expire_on_commit=False)
 
-    process_claim(session_factory, storage, settings, claim)
+    process_claim(session_factory, storage, settings, claim, DeterministicEmbeddingProvider())
     db_session.expire_all()
 
     assert db_session.get(Document, document.id).status == DocumentStatus.FAILED
@@ -306,6 +337,67 @@ def test_no_text_pdf_fails_cleanly_without_page_or_chunk_output(db_session, iden
         ).all()
         == []
     )
+    assert (
+        db_session.scalars(
+            select(DocumentChunk).where(DocumentChunk.document_id == document.id)
+        ).all()
+        == []
+    )
+
+
+def test_embedding_provider_failure_never_marks_document_ready(db_session, identities) -> None:
+    pdf = make_text_pdf(page_texts=["Annual leave entitlement is 25 days."])
+    storage = MemoryStorage({"documents/provider-error.pdf": pdf})
+    area = KnowledgeArea(
+        workspace_id=identities.workspace.id,
+        name="Provider error",
+        normalized_name="provider error",
+        created_by=identities.owner.id,
+    )
+    document = Document(
+        workspace_id=identities.workspace.id,
+        knowledge_area=area,
+        uploaded_by=identities.owner.id,
+        original_filename="provider-error.pdf",
+        storage_key="documents/provider-error.pdf",
+        content_type="application/pdf",
+        byte_size=len(pdf),
+        page_count=1,
+        sha256=sha256(pdf).hexdigest(),
+        status=DocumentStatus.UPLOADED.value,
+    )
+    job = ProcessingJob(
+        workspace_id=identities.workspace.id,
+        document=document,
+        job_type="PROCESS_DOCUMENT",
+        status=ProcessingJobStatus.QUEUED.value,
+        attempt_count=0,
+        max_attempts=4,
+    )
+    db_session.add_all([area, document, job])
+    db_session.commit()
+    settings = SimpleNamespace(
+        processing_job_timeout_seconds=600,
+        job_heartbeat_seconds=30,
+        job_lease_seconds=90,
+        worker_max_attempts=4,
+        worker_retry_backoff_seconds=[30, 120, 600],
+        chunk_size_chars=1800,
+        chunk_overlap_chars=240,
+    )
+    claim = claim_next_job(db_session, "test-worker", settings)
+    assert claim is not None
+
+    class FailingProvider:
+        def embed(self, _texts, *, purpose, progress=None):
+            raise EmbeddingTransientError
+
+    session_factory = sessionmaker(bind=db_session.get_bind(), expire_on_commit=False)
+    process_claim(session_factory, storage, settings, claim, FailingProvider())
+    db_session.expire_all()
+
+    assert db_session.get(Document, document.id).status == DocumentStatus.PROCESSING
+    assert db_session.get(ProcessingJob, job.id).status == ProcessingJobStatus.RETRYABLE_FAILURE
     assert (
         db_session.scalars(
             select(DocumentChunk).where(DocumentChunk.document_id == document.id)
@@ -408,7 +500,15 @@ def test_chunk_persistence_failure_rolls_back_pages_and_ready_state(db_session, 
             session_factory,
             claim,
             [ExtractedPage(1, "Extracted text", "a" * 64)],
-            [PreparedChunk(0, "Invalid page range", 2, 1, "b" * 64)],
+            [
+                EmbeddedChunk(
+                    PreparedChunk(0, "Invalid page range", 2, 1, "b" * 64),
+                    [0.0] * 384,
+                    "intfloat/e5-small-v2@ffb93f3bd4047442299a41ebb6fa998a38507c52",
+                    "v1",
+                    384,
+                )
+            ],
         )
     db_session.expire_all()
 

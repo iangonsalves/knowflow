@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     object_storage_bucket: str = "knowflow-documents"
     object_storage_region: str = "us-east-1"
 
+    embedding_model: str = "intfloat/e5-small-v2"
+    embedding_revision: str = "ffb93f3bd4047442299a41ebb6fa998a38507c52"
+    embedding_dimensions: int = Field(default=384, gt=0)
+    embedding_version: Literal["v1"] = "v1"
+    embedding_cache_dir: str = "/models"
+    embedding_device: Literal["cpu"] = "cpu"
+    embedding_batch_size: int = Field(default=16, gt=0, le=128)
+
     max_upload_bytes: int = Field(default=20 * 1024 * 1024, gt=0)
     max_pdf_pages: int = Field(default=250, gt=0)
     chunk_size_chars: int = Field(default=1_800, gt=0)
@@ -43,6 +51,7 @@ class Settings(BaseSettings):
     keyword_candidates: int = Field(default=30, gt=0)
     vector_candidates: int = Field(default=30, gt=0)
     retrieval_top_k: int = Field(default=6, gt=0)
+    rrf_k: int = Field(default=60, gt=0)
     max_context_tokens: int = Field(default=6_000, gt=0)
 
     processing_job_timeout_seconds: int = Field(default=600, gt=0)
@@ -84,9 +93,27 @@ class Settings(BaseSettings):
             raise ValueError("retry backoff delays must be positive")
         if self.search_page_size > self.max_search_results:
             raise ValueError("search page size cannot exceed max search results")
+        if self.retrieval_top_k > self.max_search_results:
+            raise ValueError("retrieval top K cannot exceed max search results")
+        if self.max_question_chars > 10_000:
+            raise ValueError("max question characters cannot exceed 10000")
         if self.chunk_overlap_chars >= self.chunk_size_chars:
             raise ValueError("chunk overlap must be smaller than chunk size")
+        if (
+            self.embedding_model != "intfloat/e5-small-v2"
+            or self.embedding_revision != "ffb93f3bd4047442299a41ebb6fa998a38507c52"
+            or self.embedding_dimensions != 384
+        ):
+            raise ValueError(
+                "embedding model/dimensions must match the database vector schema; "
+                "changing them requires a migration and re-embedding"
+            )
         return self
+
+    @property
+    def embedding_model_identifier(self) -> str:
+        """Immutable model identity stored with vectors so revisions cannot be mixed."""
+        return f"{self.embedding_model}@{self.embedding_revision}"
 
 
 @lru_cache

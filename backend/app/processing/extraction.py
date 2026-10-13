@@ -62,6 +62,13 @@ class TransientProcessingError(ProcessingError):
     retryable = True
 
 
+class EmbeddingProcessingFailure(ProcessingError):
+    def __init__(self, code: str, safe_message: str, retryable: bool) -> None:
+        self.code = code
+        self.safe_message = safe_message
+        self.retryable = retryable
+
+
 class ProcessingTimedOut(TransientProcessingError):
     code = "processing_timeout"
     safe_message = "Processing exceeded its time limit and will be retried."

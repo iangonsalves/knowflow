@@ -1,0 +1,17 @@
+[
+  {
+    "query": "How much annual leave do employees receive?",
+    "expected_text": "receive 25 working days of paid annual leave",
+    "page": 2
+  },
+  {
+    "query": "How many unused leave days can carry into the next year?",
+    "expected_text": "carry forward up to 5 unused annual leave days",
+    "page": 2
+  },
+  {
+    "query": "How long is the standard probation period?",
+    "expected_text": "probation period is six months",
+    "page": 3
+  }
+]
