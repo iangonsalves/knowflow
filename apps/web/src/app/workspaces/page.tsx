@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { createWorkspace, signOutAction } from "@/app/actions";
 import PendingSubmitButton from "@/app/components/PendingSubmitButton";
+import BackendStartupNotice from "@/app/components/BackendStartupNotice";
 import { apiFetch } from "@/lib/api";
 
 type Workspace = {
@@ -27,6 +28,8 @@ export default async function WorkspacesPage({
   const profile = meResponse.ok ? ((await meResponse.json()) as UserProfile) : null;
   const workspaces = workspaceResponse.ok ? ((await workspaceResponse.json()) as Workspace[]) : [];
 
+  if (!meResponse.ok || !workspaceResponse.ok) return <BackendStartupNotice />;
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -41,9 +44,6 @@ export default async function WorkspacesPage({
         <h1 className="page-title">Your workspaces</h1>
         <p className="page-intro">Workspace access is determined by your KnowFlow membership.</p>
         {error ? <p className="notice notice-error" role="alert">{error}</p> : null}
-        {!meResponse.ok || !workspaceResponse.ok ? (
-          <p className="notice notice-error" role="alert">Could not load your account. Check the API and WorkOS configuration.</p>
-        ) : null}
         <section className="panel" aria-labelledby="workspace-list-title">
           <div className="panel-heading">
             <div><h2 id="workspace-list-title">Workspaces</h2><p>Only workspaces where you are a member appear here.</p></div>

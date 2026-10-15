@@ -1,0 +1,90 @@
+services:
+  - type: web
+    name: knowflow-backend
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile.onnx
+    dockerContext: ./backend
+    healthCheckPath: /health/live
+    autoDeployTrigger: "off"
+    maxShutdownDelaySeconds: 120
+    envVars:
+      - key: PORT
+        value: "8000"
+      - key: KNOWFLOW_APP_ENV
+        value: production
+      - key: KNOWFLOW_ALLOWED_ORIGINS
+        value: "[]"
+      - key: KNOWFLOW_RUN_WORKER_IN_API
+        value: "true"
+      - key: KNOWFLOW_EMBEDDING_BACKEND
+        value: onnx
+      - key: KNOWFLOW_EMBEDDING_BATCH_SIZE
+        value: "1"
+      - key: KNOWFLOW_WORKER_POLL_INTERVAL_SECONDS
+        value: "600"
+      - key: KNOWFLOW_MAX_UPLOAD_BYTES
+        value: "8388608"
+      - key: KNOWFLOW_MAX_PDF_PAGES
+        value: "250"
+      - key: KNOWFLOW_RATE_LIMIT_QUESTIONS_PER_MINUTE
+        value: "20"
+      - key: KNOWFLOW_RATE_LIMIT_QUESTION_BURST
+        value: "5"
+      - key: KNOWFLOW_RATE_LIMIT_UPLOADS_PER_HOUR
+        value: "3"
+      - key: KNOWFLOW_RATE_LIMIT_UPLOAD_BYTES_PER_HOUR
+        value: "25165824"
+      - key: BACKEND_EXTERNAL_URL
+        fromService:
+          type: web
+          name: knowflow-backend
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: KNOWFLOW_DATABASE_URL
+        sync: false
+      - key: KNOWFLOW_OBJECT_STORAGE_ENDPOINT_URL
+        sync: false
+      - key: KNOWFLOW_OBJECT_STORAGE_REGION
+        sync: false
+      - key: KNOWFLOW_OBJECT_STORAGE_BUCKET
+        sync: false
+      - key: KNOWFLOW_OBJECT_STORAGE_ACCESS_KEY
+        sync: false
+      - key: KNOWFLOW_OBJECT_STORAGE_SECRET_KEY
+        sync: false
+      - key: WORKOS_CLIENT_ID
+        sync: false
+      - key: WORKOS_API_KEY
+        sync: false
+      - key: WORKOS_ISSUER
+        sync: false
+      - key: WORKOS_TOKEN_AUDIENCE
+        sync: false
+
+  - type: web
+    name: knowflow-web
+    runtime: node
+    plan: free
+    rootDir: apps/web
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health/live
+    autoDeployTrigger: "off"
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: NODE_VERSION
+        value: 22.22.0
+      - key: API_INTERNAL_BASE_URL
+        fromService:
+          type: web
+          name: knowflow-backend
+          envVarKey: BACKEND_EXTERNAL_URL
+      - key: WORKOS_CLIENT_ID
+        sync: false
+      - key: WORKOS_API_KEY
+        sync: false
+      - key: WORKOS_COOKIE_PASSWORD
+        sync: false
+      # Set NEXT_PUBLIC_WORKOS_REDIRECT_URI after Render assigns the frontend
+      # URL; the exact callback is provided in M8.4 Phase B.

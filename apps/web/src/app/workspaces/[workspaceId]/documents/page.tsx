@@ -57,7 +57,7 @@ export default async function DocumentsPage({
         <p className="page-intro">Private PDFs are stored outside the database and are available to workspace members.</p>
         {query.error ? <p className="notice notice-error" role="alert">{query.error}</p> : null}
         {isOwner ? <section className="panel" aria-labelledby="upload-title">
-          <div className="panel-heading"><div><h2 id="upload-title">Upload a PDF</h2><p>PDF only · selectable text required · up to 20 MiB and 250 pages. Scanned PDFs need OCR, which V1 does not provide.</p></div></div>
+          <div className="panel-heading"><div><h2 id="upload-title">Upload a PDF</h2><p>PDF only · selectable text required · up to 8 MiB and 250 pages. Scanned PDFs need OCR, which V1 does not provide.</p></div></div>
           {areas.length ? <form action={uploadDocument} className="upload-form">
             <input type="hidden" name="workspace_id" value={workspaceId} />
             <div className="form-field"><label className="field-label" htmlFor="document-area">Knowledge area</label><select id="document-area" name="knowledge_area_id" required defaultValue={query.knowledge_area_id ?? ""}><option value="" disabled>Select an area</option>{areas.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</select></div>
