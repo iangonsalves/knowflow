@@ -7,7 +7,6 @@ services:
     dockerContext: ./backend
     healthCheckPath: /health/live
     autoDeployTrigger: "off"
-    maxShutdownDelaySeconds: 120
     envVars:
       - key: PORT
         value: "8000"
