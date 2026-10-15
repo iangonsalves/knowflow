@@ -11,8 +11,9 @@ export default async function Home() {
         <p className="eyebrow">Business knowledge workspace</p>
         <h1 id="page-title">KnowFlow</h1>
         <p className="description">
-          Organize company knowledge in workspaces. This M2 preview demonstrates secure sign-in,
-          workspace ownership, and member access.
+          Organize private business documents, then ask questions and explore the source passages
+          with page citations. KnowFlow finds evidence from your documents without generating or
+          paraphrasing answers.
         </p>
         <div className="button-row">
           <a className="button button-primary" href="/sign-in">Sign in</a>
