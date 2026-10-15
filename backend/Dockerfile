@@ -14,7 +14,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \
         "torch==2.8.0+cpu" \
-    && python -c 'import tomllib; from pathlib import Path; p=tomllib.loads(Path("pyproject.toml").read_text()); deps=p["build-system"]["requires"] + p["project"]["dependencies"] + p["project"]["optional-dependencies"]["dev"]; Path("/tmp/knowflow-requirements.txt").write_text("\n".join(deps) + "\n")' \
+    && python -c 'import tomllib; from pathlib import Path; p=tomllib.loads(Path("pyproject.toml").read_text()); deps=p["build-system"]["requires"] + p["project"]["dependencies"] + p["project"]["optional-dependencies"]["dev"] + p["project"]["optional-dependencies"]["local-embeddings"]; Path("/tmp/knowflow-requirements.txt").write_text("\n".join(deps) + "\n")' \
     && python -m pip install --no-cache-dir \
         --constraint constraints-linux-cpu.txt \
         --requirement /tmp/knowflow-requirements.txt

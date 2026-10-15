@@ -36,12 +36,21 @@ class Settings(BaseSettings):
     object_storage_region: str = "us-east-1"
 
     embedding_model: str = "intfloat/e5-small-v2"
+    embedding_backend: Literal["sentence_transformers", "onnx"] = "sentence_transformers"
     embedding_revision: str = "ffb93f3bd4047442299a41ebb6fa998a38507c52"
     embedding_dimensions: int = Field(default=384, gt=0)
     embedding_version: Literal["v1"] = "v1"
     embedding_cache_dir: str = "/models"
+    embedding_onnx_model_path: str = "/models/e5-small-v2/model.onnx"
+    embedding_tokenizer_path: str = "/models/e5-small-v2/tokenizer.json"
     embedding_device: Literal["cpu"] = "cpu"
     embedding_batch_size: int = Field(default=16, gt=0, le=128)
+
+    # Deployment-only topology: the API process can host the durable worker loop.
+    # Local Compose keeps the separate worker container and two-second polling.
+    run_worker_in_api: bool = False
+    worker_poll_interval_seconds: int = Field(default=2, ge=1, le=3_600)
+    worker_shutdown_timeout_seconds: int = Field(default=20, ge=1, le=120)
 
     max_upload_bytes: int = Field(default=20 * 1024 * 1024, gt=0)
     max_pdf_pages: int = Field(default=250, gt=0)
@@ -81,6 +90,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_runtime_relationships(self) -> "Settings":
+        if self.run_worker_in_api and self.embedding_backend != "onnx":
+            raise ValueError("in-process deployment worker requires the ONNX embedding backend")
+        if self.run_worker_in_api and self.embedding_batch_size != 1:
+            raise ValueError("in-process deployment worker requires embedding batch size 1")
         if self.app_env == "production":
             if "local_only" in self.database_url:
                 raise ValueError("production must use a non-development database credential")
@@ -118,6 +131,13 @@ class Settings(BaseSettings):
     def embedding_model_identifier(self) -> str:
         """Immutable model identity stored with vectors so revisions cannot be mixed."""
         return f"{self.embedding_model}@{self.embedding_revision}"
+
+    @property
+    def embedding_storage_version(self) -> str:
+        """Separate quantized ONNX vectors until cross-runtime compatibility is proven."""
+        if self.embedding_backend == "onnx":
+            return f"{self.embedding_version}-onnx-int8-matmul"
+        return self.embedding_version
 
 
 @lru_cache

@@ -1,4 +1,8 @@
+import threading
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
+from types import SimpleNamespace
 from uuid import uuid4
 
 from app.core.config import Settings
@@ -9,7 +13,9 @@ from app.db.models import (
     ProcessingJob,
     ProcessingJobStatus,
 )
+from app.jobs import worker as worker_module
 from app.jobs.service import claim_next_job, record_failure
+from app.jobs.worker import process_claim, run_worker
 from app.processing.extraction import InvalidSourcePDF, TransientProcessingError
 
 OWNER_HEADERS = {"Authorization": "Bearer workos_owner_sub"}
@@ -89,6 +95,89 @@ def test_expired_lease_is_reclaimed_with_new_token_and_attempt(db_session, ident
     assert second.attempt_count == 2
     assert second.lease_token != first.lease_token
     assert db_session.get(Document, document.id).status == DocumentStatus.PROCESSING
+
+
+def test_shutdown_during_processing_leaves_job_for_expired_lease_recovery(
+    db_session, identities
+) -> None:
+    document, job = create_processing_document(db_session, identities)
+    settings = Settings(_env_file=None, app_env="test")
+    now = datetime.now(UTC)
+    claim = claim_next_job(db_session, "api-worker", settings, now)
+    assert claim is not None
+    stop_event = threading.Event()
+
+    class ShutdownStream(BytesIO):
+        def read(self, *args):
+            block = super().read(*args)
+            if block:
+                stop_event.set()
+            return block
+
+    class Storage:
+        def get_file(self, _key):
+            return ShutdownStream(b"pdf-data"), 8
+
+    process_claim(
+        lambda: db_session,
+        Storage(),
+        settings,
+        claim,
+        embedding_provider=object(),
+        stop_event=stop_event,
+    )
+
+    job = db_session.get(ProcessingJob, job.id)
+    document = db_session.get(Document, document.id)
+    assert job.status == ProcessingJobStatus.RUNNING
+    assert job.lease_token == claim.lease_token
+    assert document.status == DocumentStatus.PROCESSING
+
+    job.locked_at = now - timedelta(seconds=settings.job_lease_seconds + 1)
+    db_session.commit()
+    recovered = claim_next_job(db_session, "restarted-api-worker", settings, now)
+    assert recovered is not None
+    assert recovered.job_id == claim.job_id
+    assert recovered.lease_token != claim.lease_token
+    assert recovered.attempt_count == 2
+
+
+def test_worker_processes_jobs_serially_in_one_worker_loop(monkeypatch) -> None:
+    settings = Settings(_env_file=None, app_env="test", worker_poll_interval_seconds=1)
+    stop_event = threading.Event()
+    claims = [
+        SimpleNamespace(job_id=uuid4(), attempt_count=1),
+        SimpleNamespace(job_id=uuid4(), attempt_count=1),
+    ]
+    call_count = 0
+    active = 0
+    peak_active = 0
+
+    def next_claim(*_args):
+        return claims.pop(0) if claims else None
+
+    def process(*_args, **_kwargs):
+        nonlocal call_count, active, peak_active
+        active += 1
+        peak_active = max(peak_active, active)
+        call_count += 1
+        active -= 1
+        if call_count == 2:
+            stop_event.set()
+
+    monkeypatch.setattr(worker_module, "claim_next_job", next_claim)
+    monkeypatch.setattr(worker_module, "process_claim", process)
+    run_worker(
+        session_factory=lambda: nullcontext(),
+        storage=object(),
+        settings=settings,
+        stop_event=stop_event,
+        worker_id="single-thread",
+        embedding_provider=object(),
+    )
+
+    assert call_count == 2
+    assert peak_active == 1
 
 
 def test_retryable_and_permanent_failures_update_job_and_document(

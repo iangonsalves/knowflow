@@ -4,7 +4,7 @@ KnowFlow is a workspace-based business knowledge platform. Its approved product 
 
 ## Current milestone
 
-M1–M6 are approved and frozen. M7 polishes the authenticated workspace experience and hardens user-facing states without changing backend, retrieval, or evidence behavior. Ask KnowFlow presents retrieved source passages; it does not generate or paraphrase answers. WorkOS authentication remains unchanged. M8 deployment/release has not started.
+M1–M7 are approved and frozen. M8.1 proved the deployment ONNX E5 runtime under a 512 MiB container limit; M8.2 prepares an opt-in combined API/worker backend topology. Deployment itself, Neon provisioning, and M8.3 have not started.
 
 ## Requirements
 
@@ -85,15 +85,23 @@ Chunking is configurable with `KNOWFLOW_CHUNK_SIZE_CHARS` (default 1800) and `KN
 
 The backend pins PyTorch to 2.8.0. Docker and Linux CI install the matching `2.8.0+cpu` wheel from PyTorch's CPU-only wheel index before the other Python dependencies, so ARM64 and x86_64 Linux environments do not resolve the default CUDA-enabled PyPI build. Native macOS installs use the same pinned PyTorch version, while KnowFlow explicitly runs inference on CPU. The Docker dependency layer is based on `pyproject.toml` and `constraints-linux-cpu.txt`, and is built before application source is copied, so changing Python code does not reinstall dependencies.
 
+### M8.2 deployment backend topology (opt-in)
+
+Normal local Compose remains unchanged: API and worker run in separate containers, use the local Sentence Transformers provider, and the worker polls every 2 seconds. For the eventual constrained portfolio backend, `backend/Dockerfile.onnx` provides a CPU-only ONNX image with the pinned E5 artifact baked in, no PyTorch/Sentence Transformers, a non-root runtime user, and ONNX batch size 1. Configure the service with `KNOWFLOW_EMBEDDING_BACKEND=onnx`, `KNOWFLOW_EMBEDDING_BATCH_SIZE=1`, `KNOWFLOW_RUN_WORKER_IN_API=true`, and `KNOWFLOW_WORKER_POLL_INTERVAL_SECONDS=600`. The setting validator rejects enabling this topology with another backend or batch size.
+
+When enabled, FastAPI initializes one process-cached embedding provider/session before accepting traffic and passes that same provider to its existing PostgreSQL durable worker loop. The worker processes one job at a time; ONNX inference is serialized between worker and search requests to control peak memory. After a successful upload or retry, an in-process event wakes the worker immediately; PostgreSQL remains the durable source of truth and a 10-minute polling interval is the recovery fallback. This lets an idle Neon database suspend between checks without delaying normal upload processing. Shutdown stops new claims and interrupts at processing checkpoints. An interrupted job retains its lease and is recovered by the existing expired-lease/fencing logic after restart. `/health/ready` checks PostgreSQL, the pgvector extension, provider initialization, and worker-thread liveness; it never runs an embedding. The ONNX model is part of the image, so runtime model download is not required. These settings prepare the backend image only; no cloud resources or deployment have been created.
+
 For a native Linux Python environment, use the same CPU wheel first, then apply the committed constraint:
 
 ```bash
 cd backend
 python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.8.0+cpu"
-python -m pip install -e ".[dev]" --constraint constraints-linux-cpu.txt
+python -m pip install -e ".[dev,local-embeddings]" --constraint constraints-linux-cpu.txt
 ```
 
-On macOS, install the project normally from `backend` with `python -m pip install -e ".[dev]"`; the app's configured inference device remains CPU.
+On macOS, install the project normally from `backend` with `python -m pip install -e ".[dev,local-embeddings]"`; the app's configured inference device remains CPU.
+
+For the deployment-only ONNX E5 image, 512 MiB Docker benchmark, PyTorch/ONNX vector comparison, and real PostgreSQL retrieval checks, see [the M8.1 local ONNX verification guide](docs/M8.1_LOCAL_ONNX_BENCHMARK.md).
 
 Semantic retrieval uses pgvector cosine distance with exact scans for the small current corpus. PostgreSQL FTS uses `websearch_to_tsquery('english', ...)`, `ts_rank_cd`, and a GIN index over `to_tsvector('english', text)`. Independent top-30 lists are combined with RRF (`KNOWFLOW_RRF_K=60`) and capped at `KNOWFLOW_RETRIEVAL_TOP_K=6`; candidate limits are configurable. Results include document/chunk IDs and page ranges and only include active READY documents with vectors matching the configured model/version. Search is workspace membership protected in FastAPI. An inaccessible knowledge-area ID returns 404.
 

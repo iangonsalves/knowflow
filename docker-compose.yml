@@ -40,6 +40,7 @@ services:
     environment:
       KNOWFLOW_DATABASE_URL: ${KNOWFLOW_DATABASE_URL:-postgresql+psycopg://knowflow:knowflow_local_only@db:5432/knowflow}
       KNOWFLOW_APP_ENV: ${KNOWFLOW_APP_ENV:-development}
+      KNOWFLOW_RUN_WORKER_IN_API: "false"
       WORKOS_CLIENT_ID: ${WORKOS_CLIENT_ID:-}
       WORKOS_API_KEY: ${WORKOS_API_KEY:-}
       WORKOS_ISSUER: ${WORKOS_ISSUER:-}
@@ -75,6 +76,7 @@ services:
     environment:
       KNOWFLOW_DATABASE_URL: ${KNOWFLOW_DATABASE_URL:-postgresql+psycopg://knowflow:knowflow_local_only@db:5432/knowflow}
       KNOWFLOW_APP_ENV: ${KNOWFLOW_APP_ENV:-development}
+      KNOWFLOW_RUN_WORKER_IN_API: "false"
       WORKOS_CLIENT_ID: ${WORKOS_CLIENT_ID:-}
       WORKOS_API_KEY: ${WORKOS_API_KEY:-}
       WORKOS_ISSUER: ${WORKOS_ISSUER:-}

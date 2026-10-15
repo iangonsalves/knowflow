@@ -1,0 +1,77 @@
+# Build an INT8 ONNX artifact from the exact pinned E5 revision. Dynamic QInt8
+# MatMul quantization is portable; this does not select AVX512/VNNI-specific graphs.
+FROM python:3.12-slim AS model-builder
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /build
+RUN python -m pip install --no-cache-dir \
+      numpy==2.2.6 \
+      onnx==1.19.1 \
+      onnxruntime==1.23.2 \
+      huggingface-hub==0.36.0 \
+      tokenizers==0.22.1
+COPY scripts/build_onnx_model.py ./build_onnx_model.py
+RUN python build_onnx_model.py
+
+# Keep Sentence Transformers reference weights in a separate build stage. They
+# are copied only into the optional comparison image, never the deployment image.
+FROM model-builder AS reference-builder
+RUN python - <<'PY'
+from huggingface_hub import snapshot_download
+
+snapshot_download(
+    repo_id="intfloat/e5-small-v2",
+    revision="ffb93f3bd4047442299a41ebb6fa998a38507c52",
+    local_dir="/opt/reference-e5",
+    allow_patterns=[
+        "config.json", "modules.json", "sentence_bert_config.json",
+        "tokenizer.json", "tokenizer_config.json", "special_tokens_map.json",
+        "vocab.txt", "*.safetensors", "*.bin", "1_Pooling/*",
+    ],
+)
+PY
+
+FROM python:3.12-slim AS runtime
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    KNOWFLOW_EMBEDDING_BACKEND=onnx \
+    KNOWFLOW_EMBEDDING_BATCH_SIZE=1 \
+    KNOWFLOW_WORKER_POLL_INTERVAL_SECONDS=600 \
+    KNOWFLOW_EMBEDDING_ONNX_MODEL_PATH=/opt/knowflow-model/e5-small-v2/model.onnx \
+    KNOWFLOW_EMBEDDING_TOKENIZER_PATH=/opt/knowflow-model/e5-small-v2/tokenizer.json \
+    KNOWFLOW_EMBEDDING_CACHE_DIR=/models \
+    HF_HUB_DISABLE_TELEMETRY=1
+WORKDIR /app
+COPY pyproject.toml ./pyproject.toml
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -c 'import tomllib; from pathlib import Path; p=tomllib.loads(Path("pyproject.toml").read_text()); deps=p["build-system"]["requires"] + p["project"]["dependencies"] + p["project"]["optional-dependencies"]["deployment-onnx"]; Path("/tmp/knowflow-requirements.txt").write_text("\n".join(deps) + "\n")' \
+    && python -m pip install --no-cache-dir --requirement /tmp/knowflow-requirements.txt
+COPY app ./app
+COPY migrations ./migrations
+COPY alembic.ini ./alembic.ini
+COPY --from=model-builder /opt/knowflow-model/e5-small-v2 /opt/knowflow-model/e5-small-v2
+RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation -e . \
+    && python -c 'import importlib.util; assert importlib.util.find_spec("torch") is None; assert importlib.util.find_spec("sentence_transformers") is None; import onnxruntime; print("ONNX Runtime", onnxruntime.__version__, "CPU-only")' \
+    && useradd --system --uid 10001 --create-home knowflow \
+    && mkdir -p /models \
+    && chown knowflow:knowflow /models
+
+EXPOSE 8000
+USER knowflow
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+FROM runtime AS benchmark
+COPY tests ./tests
+COPY scripts ./scripts
+USER root
+RUN python -m pip install --no-cache-dir pytest==8.3.5 ruff==0.14.0
+USER knowflow
+CMD ["python", "scripts/benchmark_onnx_embeddings.py"]
+
+FROM benchmark AS compare
+USER root
+RUN python -m pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu "torch==2.8.0+cpu" \
+    && python -m pip install --no-cache-dir "sentence-transformers>=3.4,<6"
+COPY --from=reference-builder /opt/reference-e5 /opt/reference-e5
+RUN python -c 'import torch, sentence_transformers; print("Comparison image has CPU torch", torch.__version__, "and Sentence Transformers", sentence_transformers.__version__)'
+USER knowflow
+CMD ["python", "scripts/compare_embedding_providers.py"]

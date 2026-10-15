@@ -19,14 +19,21 @@ dependencies = [
   "pydantic-settings>=2.7,<3",
   "PyJWT[crypto]>=2.10,<3",
   "sqlalchemy>=2.0,<3",
-  "sentence-transformers>=3.4,<6",
-  # Pin the runtime Torch API; Linux Docker installs the matching CPU-only wheel.
-  # macOS development resolves the same version from the standard PyPI index.
-  "torch==2.8.0",
   "uvicorn[standard]>=0.34,<1",
 ]
 
 [project.optional-dependencies]
+local-embeddings = [
+  "sentence-transformers>=3.4,<6",
+  # Pin the runtime Torch API; Linux Docker installs the matching CPU-only wheel.
+  # macOS development resolves the same version from the standard PyPI index.
+  "torch==2.8.0",
+]
+deployment-onnx = [
+  "numpy==2.2.6",
+  "onnxruntime==1.23.2",
+  "tokenizers==0.22.1",
+]
 dev = [
   "pytest>=8.3,<9",
   "ruff>=0.9,<1",

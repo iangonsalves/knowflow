@@ -36,6 +36,30 @@ def test_approved_operating_defaults_are_loaded() -> None:
     assert settings.worker_retry_backoff_seconds == [30, 120, 600]
     assert settings.job_lease_seconds == 90
     assert settings.job_heartbeat_seconds == 30
+    assert settings.run_worker_in_api is False
+    assert settings.worker_poll_interval_seconds == 2
+
+
+def test_in_process_deployment_worker_requires_onnx_and_batch_one() -> None:
+    deployment = Settings(
+        _env_file=None,
+        embedding_backend="onnx",
+        embedding_batch_size=1,
+        run_worker_in_api=True,
+        worker_poll_interval_seconds=15,
+    )
+    assert deployment.embedding_batch_size == 1
+    assert deployment.worker_poll_interval_seconds == 15
+
+    with pytest.raises(ValidationError, match="requires the ONNX embedding backend"):
+        Settings(_env_file=None, run_worker_in_api=True)
+    with pytest.raises(ValidationError, match="requires embedding batch size 1"):
+        Settings(
+            _env_file=None,
+            embedding_backend="onnx",
+            embedding_batch_size=2,
+            run_worker_in_api=True,
+        )
 
 
 def test_invalid_limits_fail_validation() -> None:
