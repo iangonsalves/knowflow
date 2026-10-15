@@ -34,11 +34,6 @@ services:
         value: "3"
       - key: KNOWFLOW_RATE_LIMIT_UPLOAD_BYTES_PER_HOUR
         value: "25165824"
-      - key: BACKEND_EXTERNAL_URL
-        fromService:
-          type: web
-          name: knowflow-backend
-          envVarKey: RENDER_EXTERNAL_URL
       - key: KNOWFLOW_DATABASE_URL
         sync: false
       - key: KNOWFLOW_OBJECT_STORAGE_ENDPOINT_URL
@@ -74,16 +69,13 @@ services:
         value: "10000"
       - key: NODE_VERSION
         value: 22.22.0
-      - key: API_INTERNAL_BASE_URL
-        fromService:
-          type: web
-          name: knowflow-backend
-          envVarKey: BACKEND_EXTERNAL_URL
       - key: WORKOS_CLIENT_ID
         sync: false
       - key: WORKOS_API_KEY
         sync: false
       - key: WORKOS_COOKIE_PASSWORD
         sync: false
-      # Set NEXT_PUBLIC_WORKOS_REDIRECT_URI after Render assigns the frontend
-      # URL; the exact callback is provided in M8.4 Phase B.
+      # After Render assigns both public URLs, add these in the service
+      # dashboard (they cannot be derived from an unsupported service ref):
+      # API_INTERNAL_BASE_URL=https://<knowflow-backend>.onrender.com
+      # NEXT_PUBLIC_WORKOS_REDIRECT_URI=https://<knowflow-web>.onrender.com/callback
