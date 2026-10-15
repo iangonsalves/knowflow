@@ -21,6 +21,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.rate_limits import process_rate_limiter
 from app.db.session import get_session
 from app.documents.schemas import DocumentResponse
 from app.documents.service import (
@@ -73,6 +74,21 @@ def post_document(
     settings = get_settings()
     validate_declared_request_size(request.headers.get("content-length"), settings)
     validated_pdf = validate_pdf_upload(file, settings)
+    retry_after = process_rate_limiter.consume_upload(
+        str(current_user.id),
+        validated_pdf.byte_size,
+        uploads_per_hour=settings.rate_limit_uploads_per_hour,
+        bytes_per_hour=settings.rate_limit_upload_bytes_per_hour,
+    )
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "upload_rate_limit",
+                "message": "Upload limit reached. Try again later.",
+            },
+            headers={"Retry-After": str(retry_after)},
+        )
     response = upload_document(session, access, knowledge_area_id, file, validated_pdf, storage)
     wake_in_process_worker()
     return response

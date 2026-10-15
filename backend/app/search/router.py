@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
+from app.core.rate_limits import process_rate_limiter
 from app.db.session import get_session
 from app.embeddings.factory import get_embedding_provider
 from app.embeddings.provider import EmbeddingConfigurationError, EmbeddingError, EmbeddingProvider
@@ -24,6 +25,7 @@ def _retrieve_for_workspace(
     payload: SearchRequest,
     session: Session,
     settings: Settings,
+    user_id: str,
 ):
     if len(payload.query) > settings.max_question_chars:
         raise HTTPException(
@@ -42,6 +44,20 @@ def _retrieve_for_workspace(
                 "code": "result_limit_too_high",
                 "message": f"Search result limit cannot exceed {settings.max_search_results}",
             },
+        )
+    retry_after = process_rate_limiter.consume_question(
+        user_id,
+        per_minute=settings.rate_limit_questions_per_minute,
+        burst=settings.rate_limit_question_burst,
+    )
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "question_rate_limit",
+                "message": "Too many questions. Try again shortly.",
+            },
+            headers={"Retry-After": str(retry_after)},
         )
     try:
         provider: EmbeddingProvider = get_embedding_provider(settings)
@@ -74,7 +90,9 @@ def search_workspace(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> SearchResponse:
     require_workspace_access(session, current_user, workspace_id)
-    results = _retrieve_for_workspace(workspace_id, payload, session, settings)
+    results = _retrieve_for_workspace(
+        workspace_id, payload, session, settings, str(current_user.id)
+    )
     return SearchResponse(query=payload.query, results=results)
 
 
@@ -88,7 +106,9 @@ def ask_workspace(
 ) -> AskResponse:
     """Return selected source evidence; this endpoint does not generate answers."""
     require_workspace_access(session, current_user, workspace_id)
-    results = _retrieve_for_workspace(workspace_id, payload, session, settings)
+    results = _retrieve_for_workspace(
+        workspace_id, payload, session, settings, str(current_user.id)
+    )
     selected = select_evidence(
         results,
         question=payload.query,
