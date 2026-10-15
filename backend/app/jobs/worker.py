@@ -34,7 +34,27 @@ from app.processing.extraction import (
 from app.processing.persistence import EmbeddedChunk, persist_processed_output
 
 logger = logging.getLogger("knowflow.worker")
-POLL_INTERVAL_SECONDS = 2
+_registered_wakeup_event: threading.Event | None = None
+_wakeup_registration_lock = threading.Lock()
+
+
+class WorkerShutdownRequested(Exception):
+    """Stop processing without failing the job; its lease enables restart recovery."""
+
+
+def register_in_process_wakeup(event: threading.Event | None) -> None:
+    """Publish an advisory wake-up signal for upload/retry requests in this process."""
+    global _registered_wakeup_event
+    with _wakeup_registration_lock:
+        _registered_wakeup_event = event
+
+
+def wake_in_process_worker() -> None:
+    """Wake the hosted poller after a committed job is added to PostgreSQL."""
+    with _wakeup_registration_lock:
+        event = _registered_wakeup_event
+    if event is not None:
+        event.set()
 
 
 def process_claim(
@@ -43,12 +63,15 @@ def process_claim(
     settings: Settings,
     claim: ClaimedJob,
     embedding_provider: EmbeddingProvider | None = None,
+    stop_event: threading.Event | None = None,
 ) -> None:
     started = time.monotonic()
     last_heartbeat = started
 
     def heartbeat_if_due(force: bool = False) -> None:
         nonlocal last_heartbeat
+        if stop_event is not None and stop_event.is_set():
+            raise WorkerShutdownRequested
         now = time.monotonic()
         if now - started >= settings.processing_job_timeout_seconds:
             raise ProcessingTimedOut
@@ -107,6 +130,10 @@ def process_claim(
         persist_processed_output(session_factory, claim, pages, embedded_chunks)
     except LeaseLost:
         logger.info("Worker lease was lost for job %s", claim.job_id)
+    except WorkerShutdownRequested:
+        # Keep the RUNNING lease intact. Once it expires, the normal job claimer
+        # recovers it with a fresh fencing token and retry attempt.
+        logger.info("Stopping job %s for process shutdown; lease will recover it", claim.job_id)
     except ProcessingError as error:
         _record_failure_safely(session_factory, claim, error, settings)
     except EmbeddingError as error:
@@ -155,15 +182,21 @@ def run_worker(
     settings: Settings | None = None,
     stop_event: threading.Event | None = None,
     worker_id: str | None = None,
+    embedding_provider: EmbeddingProvider | None = None,
+    wakeup_event: threading.Event | None = None,
 ) -> None:
     settings = settings or get_settings()
     storage = storage or get_object_storage()
     stop_event = stop_event or threading.Event()
     worker_id = worker_id or f"{socket.gethostname()}:{uuid4()}"
     logger.info("Document worker started (worker_id=%s)", worker_id)
-    embedding_provider: EmbeddingProvider | None = None
+    poll_interval_seconds = settings.worker_poll_interval_seconds
 
     while not stop_event.is_set():
+        # Clear before checking PostgreSQL: a concurrent enqueue then either appears
+        # in the claim query or leaves the event set for the wait below.
+        if wakeup_event is not None:
+            wakeup_event.clear()
         if embedding_provider is None:
             try:
                 # Load/download before claiming work; cold-start model setup must not
@@ -171,7 +204,7 @@ def run_worker(
                 embedding_provider = get_embedding_provider(settings)
             except EmbeddingTransientError as error:
                 logger.warning("Local embedding model is not ready (error=%s)", error.code)
-                stop_event.wait(POLL_INTERVAL_SECONDS)
+                _wait_for_work(stop_event, wakeup_event, poll_interval_seconds)
                 continue
             except EmbeddingConfigurationError:
                 logger.exception("Local embedding model configuration is invalid")
@@ -180,15 +213,33 @@ def run_worker(
             with session_factory() as session:
                 claim = claim_next_job(session, worker_id, settings)
             if claim is None:
-                stop_event.wait(POLL_INTERVAL_SECONDS)
+                _wait_for_work(stop_event, wakeup_event, poll_interval_seconds)
                 continue
             logger.info("Processing job %s (attempt=%s)", claim.job_id, claim.attempt_count)
-            process_claim(session_factory, storage, settings, claim, embedding_provider)
+            process_claim(
+                session_factory,
+                storage,
+                settings,
+                claim,
+                embedding_provider,
+                stop_event,
+            )
         except Exception as error:
             logger.error("Worker loop encountered an error (error_type=%s)", type(error).__name__)
-            stop_event.wait(POLL_INTERVAL_SECONDS)
+            _wait_for_work(stop_event, wakeup_event, poll_interval_seconds)
 
     logger.info("Document worker stopped (worker_id=%s)", worker_id)
+
+
+def _wait_for_work(
+    stop_event: threading.Event,
+    wakeup_event: threading.Event | None,
+    poll_interval_seconds: int,
+) -> None:
+    if wakeup_event is None:
+        stop_event.wait(poll_interval_seconds)
+    else:
+        wakeup_event.wait(poll_interval_seconds)
 
 
 def main() -> None:

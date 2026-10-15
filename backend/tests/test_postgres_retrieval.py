@@ -32,6 +32,13 @@ RETRIEVAL_EVAL = json.loads(
 )
 
 
+def sentence_transformer_test_settings() -> Settings:
+    """Keep synthetic v1-vector fixtures independent of the process environment."""
+    return Settings(
+        _env_file=None, app_env="test", embedding_backend="sentence_transformers"
+    )
+
+
 class EvaluationProvider(FakeProvider):
     """Deterministic query vectors so each fixture query ranks its expected row first."""
 
@@ -339,7 +346,7 @@ def test_postgres_hybrid_search_uses_fts_vector_ready_filter_and_page_provenance
                 session,
                 workspace_id=workspace_id,
                 request=SearchRequest(query=RETRIEVAL_EVAL[0]["query"], limit=6),
-                settings=Settings(_env_file=None, app_env="test"),
+                settings=sentence_transformer_test_settings(),
                 embedding_provider=EvaluationProvider(),
             )
             assert results
@@ -368,7 +375,7 @@ def test_postgres_hybrid_search_uses_fts_vector_ready_filter_and_page_provenance
                 results,
                 question=RETRIEVAL_EVAL[0]["query"],
                 workspace_id=str(workspace_id),
-                settings=Settings(_env_file=None, app_env="test"),
+                settings=sentence_transformer_test_settings(),
             )
             assert selected.best is not None
             assert "25 working days" in selected.best.text
@@ -383,7 +390,7 @@ def test_postgres_hybrid_search_uses_fts_vector_ready_filter_and_page_provenance
                 session,
                 workspace_id=workspace_id,
                 request=SearchRequest(query="employees receive", limit=6),
-                settings=Settings(_env_file=None, app_env="test"),
+                settings=sentence_transformer_test_settings(),
                 embedding_provider=EvaluationProvider(),
             )
             assert any(
@@ -398,7 +405,7 @@ def test_postgres_hybrid_search_uses_fts_vector_ready_filter_and_page_provenance
                     session,
                     workspace_id=workspace_id,
                     request=SearchRequest(query=evaluation["query"], limit=6),
-                    settings=Settings(_env_file=None, app_env="test"),
+                    settings=sentence_transformer_test_settings(),
                     embedding_provider=EvaluationProvider(),
                 )
                 assert any(evaluation["expected_text"] in item.text for item in evaluated)
@@ -415,7 +422,7 @@ def test_postgres_hybrid_search_uses_fts_vector_ready_filter_and_page_provenance
                     evaluated,
                     question=evaluation["query"],
                     workspace_id=str(workspace_id),
-                    settings=Settings(_env_file=None, app_env="test"),
+                    settings=sentence_transformer_test_settings(),
                 )
                 assert evidence.best is not None
                 assert evaluation["expected_text"] in evidence.best.text
@@ -426,14 +433,14 @@ def test_postgres_hybrid_search_uses_fts_vector_ready_filter_and_page_provenance
                 session,
                 workspace_id=workspace_id,
                 request=SearchRequest(query=unsupported_question, limit=6),
-                settings=Settings(_env_file=None, app_env="test"),
+                settings=sentence_transformer_test_settings(),
                 embedding_provider=EvaluationProvider(),
             )
             unsupported = select_evidence(
                 unsupported_results,
                 question=unsupported_question,
                 workspace_id=str(workspace_id),
-                settings=Settings(_env_file=None, app_env="test"),
+                settings=sentence_transformer_test_settings(),
             )
             assert unsupported.state in {"weak_evidence", "no_evidence"}
             assert unsupported.best is None
@@ -448,7 +455,7 @@ def test_postgres_hybrid_search_uses_fts_vector_ready_filter_and_page_provenance
                     request=SearchRequest(
                         query="annual leave", knowledge_area_id=other_area_id, limit=6
                     ),
-                    settings=Settings(_env_file=None, app_env="test"),
+                    settings=sentence_transformer_test_settings(),
                     embedding_provider=EvaluationProvider(),
                 )
             assert inaccessible_area.value.status_code == 404

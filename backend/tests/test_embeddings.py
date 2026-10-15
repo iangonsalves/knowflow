@@ -113,7 +113,9 @@ def test_only_selected_local_model_and_schema_dimensions_are_allowed() -> None:
 
 
 def test_model_download_failure_is_retryable_and_startup_needs_no_api_key() -> None:
-    settings = Settings(_env_file=None, app_env="test")
+    settings = Settings(
+        _env_file=None, app_env="test", embedding_backend="sentence_transformers"
+    )
     assert settings.embedding_model == "intfloat/e5-small-v2"
     assert not hasattr(settings, "embedding_api_key")
     with pytest.raises(EmbeddingTransientError):
@@ -126,20 +128,126 @@ def test_factory_loads_local_model_and_reuses_process_cache(monkeypatch) -> None
     model = FakeModel()
     calls = []
     monkeypatch.setattr(factory, "_load_model", lambda *args: calls.append(args) or model)
-    settings = Settings(_env_file=None, app_env="test")
+    settings = Settings(
+        _env_file=None, app_env="test", embedding_backend="sentence_transformers"
+    )
     first = get_embedding_provider(settings)
     second = get_embedding_provider(settings)
     assert isinstance(first, SentenceTransformerEmbeddingProvider)
     assert isinstance(second, SentenceTransformerEmbeddingProvider)
     assert first.model is second.model is model
+    assert (
+        calls
+        == [
+            (
+                "intfloat/e5-small-v2",
+                "ffb93f3bd4047442299a41ebb6fa998a38507c52",
+                "/models",
+                "cpu",
+            )
+        ]
+        * 2
+    )
+
+
+def test_onnx_provider_uses_same_e5_prefix_dimensions_and_normalizes() -> None:
+    from types import SimpleNamespace
+
+    pytest.importorskip("numpy", reason="NumPy is installed by the opt-in ONNX runtime extra")
+
+    from app.embeddings.onnx_runtime import ONNXEmbeddingProvider
+
+    class Tokenizer:
+        seen = []
+
+        def encode_batch(self, texts):
+            self.seen = texts
+            return [
+                SimpleNamespace(ids=[1, 2, 0], attention_mask=[1, 1, 0], type_ids=[0, 0, 0])
+                for _ in texts
+            ]
+
+    class Session:
+        def get_inputs(self):
+            return [SimpleNamespace(name="input_ids"), SimpleNamespace(name="attention_mask")]
+
+        def get_outputs(self):
+            return [SimpleNamespace(name="last_hidden_state")]
+
+        def get_providers(self):
+            return ["CPUExecutionProvider"]
+
+        def run(self, _outputs, inputs):
+            self.inputs = inputs
+            row = [[1.0] + [0.0] * 383, [0.0, 1.0] + [0.0] * 382, [0.0] * 384]
+            return [[[list(token) for token in row] for _ in inputs["input_ids"]]]
+
+    tokenizer, session = Tokenizer(), Session()
+    settings = Settings(_env_file=None, app_env="test", embedding_backend="onnx")
+    provider = ONNXEmbeddingProvider(
+        model_name=settings.embedding_model,
+        revision=settings.embedding_revision,
+        dimensions=settings.embedding_dimensions,
+        version=settings.embedding_version,
+        model_path="model.onnx",
+        tokenizer_path="tokenizer.json",
+        cache_dir="/models",
+        batch_size=4,
+        runtime_loader=lambda *_args: (tokenizer, session),
+    )
+
+    result = provider.embed(["How much vacation?"], purpose="query")
+    assert tokenizer.seen == ["query: How much vacation?"]
+    assert set(session.inputs) == {"input_ids", "attention_mask"}
+    assert result.model == settings_model_identifier()
+    assert result.dimensions == 384
+    assert len(result.vectors[0]) == 384
+    assert abs(sum(value * value for value in result.vectors[0]) - 1.0) < 1e-9
+    assert result.vectors[0][0] == pytest.approx(result.vectors[0][1])
+    assert result.vectors[0][2:] == [0.0] * 382
+
+    provider.embed(["Annual leave policy"], purpose="document")
+    assert tokenizer.seen == ["passage: Annual leave policy"]
+
+
+def test_factory_selects_onnx_provider_without_changing_model_identity(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from app.embeddings import factory
+    from app.embeddings.onnx_runtime import ONNXEmbeddingProvider
+
+    class Session:
+        def get_inputs(self):
+            return [
+                SimpleNamespace(name="input_ids"),
+                SimpleNamespace(name="attention_mask"),
+            ]
+
+        def get_outputs(self):
+            return [SimpleNamespace(name="embeddings")]
+
+    sentinel = (object(), Session())
+    calls = []
+    monkeypatch.setattr(
+        factory,
+        "_load_onnx_runtime",
+        lambda *args: calls.append(args) or sentinel,
+    )
+    settings = Settings(_env_file=None, app_env="test", embedding_backend="onnx")
+
+    provider = get_embedding_provider(settings)
+    assert isinstance(provider, ONNXEmbeddingProvider)
+    assert provider.model_name == "intfloat/e5-small-v2"
+    assert provider.revision == settings.embedding_revision
+    assert provider.dimensions == 384
+    assert provider.version == "v1-onnx-int8-matmul"
     assert calls == [
         (
-            "intfloat/e5-small-v2",
-            "ffb93f3bd4047442299a41ebb6fa998a38507c52",
-            "/models",
-            "cpu",
+            settings.embedding_onnx_model_path,
+            settings.embedding_tokenizer_path,
+            settings.embedding_cache_dir,
         )
-    ] * 2
+    ]
 
 
 def test_completed_model_cache_loads_offline_and_failed_load_is_not_marked(

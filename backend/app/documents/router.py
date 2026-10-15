@@ -39,6 +39,7 @@ from app.documents.storage import (
 )
 from app.documents.validation import validate_declared_request_size, validate_pdf_upload
 from app.identity.dependencies import CurrentUser
+from app.jobs.worker import wake_in_process_worker
 from app.tenancy.policies import require_owner, require_workspace_access
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/documents", tags=["documents"])
@@ -72,7 +73,9 @@ def post_document(
     settings = get_settings()
     validate_declared_request_size(request.headers.get("content-length"), settings)
     validated_pdf = validate_pdf_upload(file, settings)
-    return upload_document(session, access, knowledge_area_id, file, validated_pdf, storage)
+    response = upload_document(session, access, knowledge_area_id, file, validated_pdf, storage)
+    wake_in_process_worker()
+    return response
 
 
 @router.get("/{document_id}", response_model=DocumentResponse)
@@ -94,7 +97,9 @@ def post_document_retry(
     session: SessionDep,
 ) -> DocumentResponse:
     access = require_workspace_access(session, current_user, workspace_id)
-    return retry_document_processing(session, access, document_id)
+    response = retry_document_processing(session, access, document_id)
+    wake_in_process_worker()
+    return response
 
 
 @router.get("/{document_id}/content")

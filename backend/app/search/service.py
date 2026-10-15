@@ -80,7 +80,7 @@ def retrieve(
             Document.status == DocumentStatus.READY.value,
             DocumentChunk.embedding.is_not(None),
             DocumentChunk.embedding_model == settings.embedding_model_identifier,
-            DocumentChunk.embedding_version == settings.embedding_version,
+            DocumentChunk.embedding_version == settings.embedding_storage_version,
             DocumentChunk.embedding_dimensions == settings.embedding_dimensions,
         )
     )
