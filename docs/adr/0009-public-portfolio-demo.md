@@ -1,21 +1,24 @@
-# ADR 0009 Public portfolio demo
+# ADR 0009: Public portfolio demo hosting
 
-**Status:** Accepted for M8 planning
+**Status:** Accepted and implemented in M8
 
 ## Context
 
-KnowFlow is a personal portfolio project. Employers and reviewers need to try the finished product from links on the portfolio website, GitHub and CV. Recurring cloud costs should remain low.
+KnowFlow is a personal portfolio project. Visitors should be able to open a public HTTPS demo and try the real authenticated application, document processing, hybrid retrieval, source evidence, and protected PDF access. Recurring hosting cost must target zero; sleep, cold starts, small quotas, and no SLA are acceptable. The approved M1–M7 architecture should remain intact.
 
 ## Decision
 
-M8 must deliver a publicly accessible live demo. At M8, prefer suitable free-tier hosting and services where practical and avoid unnecessary recurring charges. Do not reshape or weaken the approved V1 architecture around a specific hosting provider before deployment evaluation.
+Host the Next.js frontend and FastAPI backend as separate Render Free web services. Use Neon for PostgreSQL with pgvector/FTS, durable processing jobs, and private S3-compatible object storage. Retain WorkOS AuthKit. Run the existing PostgreSQL-backed worker loop inside the hosted FastAPI service, sharing one ONNX E5 session with query embedding. Keep local Compose as separate web, API, worker, PostgreSQL, and MinIO services.
+
+Do not send keep-alive traffic to defeat service sleep. The frontend shows a bounded backend startup/readiness experience. Schema changes are migrated explicitly; Render auto-deploy remains disabled and releases are manually triggered after review.
 
 ## Alternatives
 
-- Local-only demo.
-- Select a cloud provider now and tailor the architecture to its free tier.
-- Use paid services without evaluating low-cost options.
+- Local-only demo: rejected because portfolio visitors need a public URL.
+- Paid always-on hosts: rejected for the zero-recurring-cost target.
+- Run the application from the owner's computer: rejected as the primary deployment because availability would depend on personal hardware/network.
+- Replace Neon/Render data paths or expose public PDF URLs: rejected because existing PostgreSQL/S3 abstractions and protected document access already fit the use case.
 
 ## Consequences
 
-Choose deployment services at M8 after checking current application needs and free tiers. Public access requires deployment security, quotas/rate limits, secrets, data reset/retention and demo availability decisions at that milestone. No hosting commitment is made now.
+The demo is public and real, but has provider quotas, cold starts, limited compute/storage, no SLA, and one-at-a-time hosted document processing. Private PDFs stay behind KnowFlow's authorization and storage adapter. The hosted worker topology consolidates processes for memory limits without replacing durable jobs, leases, retries, or fencing. Provider terms and free-tier limits must be rechecked in the dashboards over time.

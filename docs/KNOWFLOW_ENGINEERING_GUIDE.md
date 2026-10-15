@@ -1,6 +1,6 @@
 # KnowFlow Engineering Guide
 
-**Current-state technical guide | M1-M7 | 13 October 2026**
+**Current-state technical guide | M1-M8 | 15 October 2026**
 
 This guide describes the implementation currently in this repository. Code and migrations are the authority when an older plan differs. It is written to help you run, trace, debug, and explain KnowFlow, not to document every line of generated or boilerplate code.
 
@@ -16,7 +16,7 @@ KnowFlow provides a workspace for managing those documents and locating relevant
 - **Member:** browses authorized areas and documents, downloads sources, searches, and asks questions. Members do not receive the Owner's management capabilities.
 - **Ask KnowFlow:** takes one natural-language question and returns best matching evidence, optional supporting evidence, or clearly labeled potentially related passages. It is not a chat or conversation history.
 
-A typical flow is: an Owner creates a workspace, creates a Knowledge Area, and uploads a text-based PDF. A background worker extracts page text, chunks it, and creates local embeddings. When processing completes, Owners and Members can search or ask questions. The result identifies the document and page, and its protected source link opens the original document.
+A typical flow is: an Owner creates a workspace, creates a Knowledge Area, and uploads a text-based PDF. The durable worker extracts page text, chunks it, and creates local embeddings. When processing completes, Owners and Members can search or ask questions. The result identifies the document and page, and its protected source link opens the original document.
 
 **V1 deliberately excludes** generative answers, OCR, chat history, DOCX/image ingestion, document version comparison, and analytics infrastructure. Weak evidence is not presented as an answer. The user inspects the source and interprets it.
 
@@ -26,7 +26,7 @@ A typical flow is: an Owner creates a workspace, creates a Knowledge Area, and u
 
 ## 2. Current system architecture
 
-The application is a **modular monolith**: one backend codebase contains identity, tenancy, document, processing, embedding, and search modules. The API and worker run as separate processes from the same backend image. This keeps code boundaries clear without making each module a separately operated service.
+The application is a **modular monolith**: one backend codebase contains identity, tenancy, document, processing, embedding, and search modules. Local development runs the API and worker as separate processes from the same backend image. The constrained hosted portfolio deployment runs the existing durable worker loop inside the FastAPI process and shares one ONNX embedding session with Ask/search. This changes the process topology, not the job model or domain architecture.
 
 ```mermaid
 flowchart LR
@@ -36,10 +36,10 @@ flowchart LR
     A --> P[(PostgreSQL + pgvector)]
     A --> S[(Private MinIO / S3 storage)]
     A --> J[(ProcessingJob rows)]
-    J --> R[Python worker process]
+    J --> R[Durable worker loop<br/>separate locally / in API when hosted]
     R --> S
     R --> X[pypdf extraction and deterministic chunks]
-    X --> E[Local CPU E5 embeddings]
+    X --> E[Local CPU E5<br/>PyTorch locally / ONNX hosted]
     E --> P
     A --> H[FTS + vector retrieval + RRF]
     H --> Q[Deterministic evidence selection]
@@ -54,9 +54,9 @@ flowchart LR
 - **WorkOS AuthKit:** handles the identity flow, account verification, and sign-in session. It answers “who signed in?”; it does not assign KnowFlow workspace roles.
 - **FastAPI:** validates API credentials, checks membership and roles, validates requests, orchestrates services, and reads/writes PostgreSQL and object storage.
 - **PostgreSQL:** stores users, workspaces, memberships, areas, document metadata, processing jobs, extracted pages, chunks, and vectors. pgvector adds a vector column and similarity operators to PostgreSQL.
-- **MinIO:** local S3-compatible private object storage for original PDF bytes. Production can use a compatible private object store. PostgreSQL stores metadata and an opaque storage key, not the PDF bytes.
-- **Worker:** polls PostgreSQL, claims a job safely, downloads its PDF through the storage abstraction, extracts/chunks text, creates local embeddings, and commits derived output.
-- **E5 model:** a pretrained text embedding model run on CPU in the API and worker processes. It maps text to numeric vectors; it does not generate prose.
+- **Object storage:** MinIO provides local S3-compatible private storage. The hosted demo uses a private Neon Object Storage bucket through the same S3 adapter. PostgreSQL stores metadata and an opaque storage key, not the PDF bytes.
+- **Worker:** polls PostgreSQL, claims a job safely, downloads its PDF through the storage abstraction, extracts/chunks text, creates local embeddings, and commits derived output. It is a separate Compose service locally and an in-process thread in the hosted API.
+- **E5 model:** a pretrained text embedding model run on CPU. Local development uses Sentence Transformers/PyTorch; the hosted backend uses CPU ONNX Runtime with the same pinned E5-small-v2 model and one shared session. It maps text to numeric vectors; it does not generate prose.
 - **Retrieval and evidence layers:** M5 finds candidate passages with lexical and semantic search. M6 evaluates and groups evidence deterministically; it does not call an LLM.
 
 ## 3. Technology stack
@@ -72,12 +72,14 @@ flowchart LR
 | pgvector | `vector(384)` storage and cosine retrieval | Keeps vector search beside tenant and document records without another database. |
 | SQLAlchemy | ORM and database access | Models the relational schema and supports explicit tenant-scoped queries. |
 | Alembic | Schema migrations | Applies a versioned database change sequence from checked-in revisions. |
-| MinIO / S3-compatible storage | Private original PDF storage | Separates larger binary files from relational records and allows a storage adapter. |
+| MinIO / Neon private S3-compatible storage | Private original PDF storage | MinIO supports local development; the hosted private bucket fits the existing S3 adapter and keeps PDFs authorization-gated. |
 | Docker / Compose | Local service environment | Starts web, API, worker, database, and object storage consistently. |
 | WorkOS AuthKit | Managed user authentication | Avoids implementing password, verification, and recovery systems in the app. |
 | pypdf | PDF parsing and page text extraction | Extracts selectable text and preserves page numbers; OCR is outside V1. |
-| `intfloat/e5-small-v2` | Local text embeddings | Compact 384-dimension English retrieval model with CPU inference and no API key. |
-| GitHub Actions | Continuous integration | Runs backend and frontend quality gates on pull requests and main pushes. |
+| `intfloat/e5-small-v2`, Sentence Transformers, ONNX Runtime | Local text embeddings | One pinned 384-dimensional model supports PyTorch locally and a quantized CPU ONNX runtime within the hosted memory budget; no inference API is used. |
+| Render Free | Public portfolio web hosting | Hosts the Next.js frontend and FastAPI/worker separately from the persistent data layer; accepts cold starts and low resource limits. |
+| Neon | Hosted PostgreSQL, pgvector, FTS, durable jobs, private S3-compatible object storage | One hosted data provider serves the tiny portfolio workload while keeping the existing PostgreSQL and S3 interfaces. |
+| GitHub Actions | Continuous integration | Runs backend and frontend quality gates on pull requests and main pushes; it does not deploy. |
 
 ## 4. Repository structure
 
@@ -85,57 +87,61 @@ Current source paths (generated `.next`, `node_modules`, and caches are omitted)
 
 ```text
 .
-├── README.md
-├── docker-compose.yml
-├── .env.example
-├── .github/workflows/ci.yml
-├── apps/web/
-│   ├── Dockerfile
-│   ├── src/proxy.ts
-│   ├── src/lib/{api.ts,require-api-success.ts,ui-helpers.mjs}
-│   ├── src/app/actions.ts
-│   ├── src/app/api/workspaces/[workspaceId]/
-│   │   ├── ask/route.ts
-│   │   ├── search/route.ts
-│   │   └── documents/[documentId]/content/route.ts
-│   ├── src/app/components/{ConfirmSubmit,PendingSubmitButton}.tsx
-│   └── src/app/workspaces/
-│       ├── page.tsx
-│       └── [workspaceId]/
-│           ├── layout.tsx, WorkspaceNavigation.tsx, page.tsx
-│           ├── search/{page.tsx,SearchForm.tsx}
-│           ├── documents/{page.tsx,[documentId]/page.tsx}
-│           ├── knowledge-areas/page.tsx
-│           └── members/page.tsx
-├── apps/web/tests/ui-helpers.test.mjs
-├── backend/
-│   ├── Dockerfile, pyproject.toml, alembic.ini
-│   ├── app/
-│   │   ├── main.py
-│   │   ├── core/{config.py,errors.py}
-│   │   ├── db/{models.py,session.py}
-│   │   ├── identity/, tenancy/, knowledge_areas/, documents/
-│   │   ├── jobs/, processing/, embeddings/, search/
-│   │   └── api/health.py
-│   ├── migrations/
-│   │   ├── env.py
-│   │   └── versions/
-│   │       ├── 0001_enable_pgvector.py
-│   │       ├── 0002_identity_and_tenancy.py
-│   │       ├── 0003_knowledge_areas_and_documents.py
-│   │       ├── 0004_processing_jobs_and_chunks.py
-│   │       └── 0005_embeddings_retrieval.py
-│   └── tests/ (API, processing, embedding, retrieval, PostgreSQL)
-└── docs/
-    ├── KNOWFLOW_ENGINEERING_GUIDE.md / .pdf
-    ├── knowflow-v1-design.md
-    ├── adr/0001...0011
-    └── samples/ (development/test PDFs)
+|-- README.md
+|-- docker-compose.yml
+|-- render.yaml
+|-- .env.example
+|-- .github/workflows/ci.yml
+|-- apps/web/
+|   |-- Dockerfile
+|   |-- src/proxy.ts
+|   |-- src/lib/{api.ts,require-api-success.ts,ui-helpers.mjs}
+|   |-- src/app/actions.ts
+|   |-- src/app/api/health/{live,ready}/route.ts
+|   |-- src/app/api/workspaces/[workspaceId]/
+|   |   |-- ask/route.ts
+|   |   |-- search/route.ts
+|   |   +-- documents/[documentId]/content/route.ts
+|   |-- src/app/components/{ConfirmSubmit,PendingSubmitButton,BackendLoadingScreen,BackendStartupNotice}.tsx
+|   +-- src/app/workspaces/
+|       |-- page.tsx
+|       +-- [workspaceId]/
+|           |-- layout.tsx, WorkspaceNavigation.tsx, page.tsx
+|           |-- search/{page.tsx,SearchForm.tsx}
+|           |-- documents/{page.tsx,[documentId]/page.tsx}
+|           |-- knowledge-areas/page.tsx
+|           +-- members/page.tsx
+|-- apps/web/tests/ui-helpers.test.mjs
+|-- backend/
+|   |-- Dockerfile, Dockerfile.onnx, pyproject.toml, alembic.ini
+|   |-- app/
+|   |   |-- main.py
+|   |   |-- core/{config.py,errors.py}
+|   |   |-- db/{models.py,session.py}
+|   |   |-- identity/, tenancy/, knowledge_areas/, documents/
+|   |   |-- jobs/, processing/, embeddings/, search/
+|   |   +-- api/health.py
+|   |-- migrations/
+|   |   |-- env.py
+|   |   +-- versions/
+|   |       |-- 0001_enable_pgvector.py
+|   |       |-- 0002_identity_and_tenancy.py
+|   |       |-- 0003_knowledge_areas_and_documents.py
+|   |       |-- 0004_processing_jobs_and_chunks.py
+|   |       +-- 0005_embeddings_retrieval.py
+|   |-- scripts/ (pinned ONNX artifact build and embedding benchmark/comparison tools)
+|   +-- tests/ (API, processing, embedding, retrieval, PostgreSQL)
++-- docs/
+    |-- KNOWFLOW_ENGINEERING_GUIDE.md / .pdf
+    |-- KnowFlow_Project_Blueprint.pdf (earlier planning reference)
+    |-- KnowFlow_V1_Detailed_Design.pdf (earlier design reference)
+    |-- adr/0001...0011
+    +-- samples/ (development/test PDFs)
 ```
 
 - `apps/web/src/app/workspaces/[workspaceId]/layout.tsx` is the shared authenticated workspace shell. Its child pages share the top bar and workspace navigation.
 - `apps/web/src/app/actions.ts` contains server actions for form operations. Server actions call the server-only API helper rather than making the browser responsible for bearer credentials.
-- `apps/web/src/app/api/...` contains Next.js BFF routes for Ask, search, and protected PDF streaming.
+- `apps/web/src/app/api/...` contains Next.js BFF routes for Ask, search, protected PDF streaming, and backend readiness. `BackendStartupNotice` and `BackendLoadingScreen` provide a bounded cold-start/wait experience.
 - `apps/web/src/lib/api.ts` centralizes server-side API calls; `proxy.ts`, AuthKit routes, and callback implement the login/session boundary.
 - `backend/app/<domain>/` groups API routes and services by concern. `main.py` mounts the routers.
 - `backend/app/db/models.py` is the current SQLAlchemy model definition; `db/session.py` creates the engine and request session dependency.
@@ -254,7 +260,7 @@ flowchart TD
 
 ### Upload path
 
-`apps/web/src/app/workspaces/[workspaceId]/documents/page.tsx` submits an Owner upload using a server action in `apps/web/src/app/actions.ts`. The Next.js server calls FastAPI using `apiFetch`. `backend/app/documents/router.py` checks access and delegates to `documents/service.py`; `documents/validation.py` enforces a PDF structure and limits. Current defaults are 20 MiB and 250 pages; password-protected PDFs are unsupported. The stored metadata records `application/pdf`, byte size, page count, SHA-256, original filename, and an opaque key.
+`apps/web/src/app/workspaces/[workspaceId]/documents/page.tsx` submits an Owner upload using a server action in `apps/web/src/app/actions.ts`. The Next.js server calls FastAPI using `apiFetch`. `backend/app/documents/router.py` checks access and delegates to `documents/service.py`; `documents/validation.py` enforces a PDF structure and limits. Local defaults are 20 MiB and 250 pages; the hosted portfolio backend sets an 8 MiB upload limit and 250 pages to fit the Next.js action boundary and free-tier resources. Password-protected PDFs are unsupported. The stored metadata records `application/pdf`, byte size, page count, SHA-256, original filename, and an opaque key.
 
 The service writes the private object using `ObjectStorage` (`documents/storage.py`) and then commits document metadata and the `PROCESS_DOCUMENT` job together. If the database commit fails after a successful object write, the service attempts a compensating object delete. Cross-system storage and database writes cannot be one atomic transaction, so compensation and retryable cleanup handle partial failure.
 
@@ -280,7 +286,7 @@ A successful claim increments `attempt_count`, sets `RUNNING`, stores `locked_at
 
 ### Heartbeat, timeout, retries
 
-The worker polls every 2 seconds (`POLL_INTERVAL_SECONDS`). The configured lease is 90 seconds and heartbeat 30 seconds; the 600-second processing timeout is separately configurable. A heartbeat refreshes `locked_at`. If the process crashes, the lease eventually expires and the job becomes claimable again. If the worker is deliberately shut down, the process exits cleanly; uncompleted work is recovered through lease expiry.
+Local polling defaults to every 2 seconds (`KNOWFLOW_WORKER_POLL_INTERVAL_SECONDS`). Render config sets a 600-second idle poll interval to avoid keeping Neon active unnecessarily; successful uploads wake the in-process worker immediately. The hosted backend processes one document at a time and forces embedding batch size 1. The configured lease is 90 seconds and heartbeat 30 seconds; the processing timeout is separately configurable. A heartbeat refreshes `locked_at`. If the process crashes, the lease eventually expires and the job becomes claimable again. If the worker is deliberately shut down, the process exits cleanly; uncompleted work is recovered through lease expiry.
 
 `record_failure()` distinguishes retryable errors (for example temporary storage/model transport/runtime errors) from permanent document/configuration errors (for example malformed/encrypted PDF or incompatible vector output). Retry delay defaults are 30, 120, and 600 seconds with up to four attempts. The same job row records the current attempt count and last safe error; V1 does not store an immutable row for every attempt.
 
@@ -304,11 +310,15 @@ Page-aware chunks preserve the link from a search hit back to a PDF page. Overla
 
 An **embedding** is a list of numbers that represents text in a space where texts with related meaning often have nearby vectors. It supports similarity search; it does not produce an answer or new text.
 
-KnowFlow uses the pretrained Sentence Transformers-compatible model **`intfloat/e5-small-v2`**, pinned to revision `ffb93f3bd4047442299a41ebb6fa998a38507c52`. It is MIT-licensed, approximately 133 MB for the selected model file, has 384 output dimensions and supports up to 512 tokens. Inference uses CPU and does not require an API key, GPU, paid service, or model training. Approximate process memory including Python/PyTorch and model weights is 1-2 GB per loaded process; API and worker each load their own model instance.
+KnowFlow uses pretrained **`intfloat/e5-small-v2`**, pinned to revision `ffb93f3bd4047442299a41ebb6fa998a38507c52`. It is MIT-licensed, has 384 output dimensions and supports up to 512 tokens. Inference uses CPU and does not require an API key, GPU, paid service, or model training.
 
-The provider contract is `backend/app/embeddings/provider.py`; `sentence_transformers.py` validates the model identity, vector length, and finite values. Document text gets the prefix `passage: `; search/Ask questions get `query: `. This is the E5 retrieval convention. Embeddings are normalized and then stored directly on `document_chunks.embedding` as `vector(384)`. The row also stores model ID plus immutable revision, pipeline `embedding_version`, dimensions, and `embedded_at`. That metadata prevents vectors from different model revisions from silently mixing.
+Local development defaults to Sentence Transformers/PyTorch. API and worker are separate local processes and each may load its own model instance. The hosted Render image uses a portable INT8 ONNX artifact (dynamic quantization; it does not rely on AVX512/VNNI), CPU ONNX Runtime, and no PyTorch or Sentence Transformers packages. The model artifact is baked into the backend image so runtime model download is not required. At the enforced batch size of 1, the local Docker 512 MiB proof measured 306.16 MiB process peak RSS (261.64 MiB cgroup peak), no OOM, and about 206 MiB process-RSS headroom. The hosted process shares one model session between query and document embedding. This is a constrained portfolio configuration, not a general large-corpus throughput target.
 
-The Compose `model_cache` volume is mounted at `/models` and shared by API and worker. The first successful model load downloads the pinned files from Hugging Face, so initial setup requires internet. The cache completion marker makes later model loads local-only; ordinary `docker compose down` preserves it. `docker compose down -v` removes it. Weights are not committed to Git. Docker/Linux install the CPU-only PyTorch wheel; macOS inference is also configured to CPU.
+The measured ONNX model artifact was about **66.54 MiB**. Median query embedding latency in the benchmark was about **19 ms**; embedding 80 sample chunks took about **27.7 seconds** at batch size 1. A 36-vector PyTorch/ONNX comparison had paired cosine similarity from approximately **0.994 to 0.996**, and the vacation-time/annual-leave retrieval case retained the correct top result. These measurements support the portfolio workload but are not a throughput guarantee for larger documents or different hardware.
+
+The provider contract is `backend/app/embeddings/provider.py`; `sentence_transformers.py` validates the model identity, vector length, and finite values. Document text gets the prefix `passage: `; search/Ask questions get `query: `. This is the E5 retrieval convention. Embeddings are normalized and then stored directly on `document_chunks.embedding` as `vector(384)`. The row also stores model ID plus immutable revision, pipeline `embedding_version`, dimensions, and `embedded_at`. The PyTorch pipeline and ONNX INT8 pipeline use distinct embedding-version metadata. Paired-vector comparisons measured cosine similarity around 0.994–0.996 and retrieval regressions passed, but the versions are not treated as interchangeable: do not mix vectors; reprocess active documents when changing provider/version.
+
+The Compose `model_cache` volume is mounted at `/models` and shared by API and worker. The first successful local model load downloads pinned files from Hugging Face, so initial setup requires internet. The cache completion marker makes later model loads local-only; ordinary `docker compose down` preserves it. `docker compose down -v` removes it. Weights are not committed to Git. Docker/Linux install CPU-only PyTorch; macOS inference is also configured to CPU. The hosted image includes its pinned ONNX artifact at build time and does not depend on ephemeral filesystem persistence or a runtime download.
 
 Example: the user asks, “How much vacation time do staff get?” The stored policy says, “Full-time employees receive 25 working days of paid annual leave per calendar year.” FTS may have little exact token overlap between “vacation” and “annual leave.” E5 can place the two texts near each other because it was trained to represent related meaning. The retrieved source remains the actual quote; KnowFlow does not rewrite it as an answer.
 
@@ -387,7 +397,7 @@ Deletion separates **logical revocation** from **physical cleanup**. PostgreSQL 
 
 The service then deletes the original object through the adapter. If storage is temporarily unavailable, the tombstone records a safe cleanup error and remains inaccessible; a repeated Owner delete operation can retry for up to the configured 24-hour cleanup window. After physical cleanup succeeds, `cleanup_completed_at` is set and `purge_after` is 7 days later. `purge_expired_tombstones()` removes eligible metadata opportunistically during document/area operations; there is no separate scheduled cleanup worker. After the retry window expires without cleanup, the API returns a safe operator-attention error while preserving the tombstone.
 
-## 16. Docker and local development
+## 16. Local development and hosted deployment
 
 Compose services and named volumes are defined in `docker-compose.yml`.
 
@@ -399,7 +409,7 @@ Compose services and named volumes are defined in `docker-compose.yml`.
 | `db` | PostgreSQL 16 with pgvector | `postgres_data`; port 5432 |
 | `object-store` | MinIO S3-compatible API and console | `object_store_data`; ports 9000 and 9001 |
 
-The model cache volume persists independently. `HF_HOME` and `SENTENCE_TRANSFORMERS_HOME` point at `/models`.
+The model cache volume persists independently. `HF_HOME` and `SENTENCE_TRANSFORMERS_HOME` point at `/models`. Local Compose remains the full developer topology: separate API and worker, local PostgreSQL/pgvector, MinIO, and default PyTorch embeddings.
 
 ```sh
 docker compose up --build -d
@@ -416,6 +426,79 @@ docker compose down
 > `docker compose down -v` removes the named volumes too. It deletes the local PostgreSQL database, uploaded MinIO files, and downloaded model cache (as well as web dependency/cache volumes). Use it only when intentionally resetting local data.
 
 Copy `.env.example` to `.env`, configure WorkOS AuthKit callback/redirect values and audience, then start services. Local default database/object-store credentials are development-only. Apply migrations before readiness-dependent flows. On first model initialization, internet is needed to fetch the pinned E5 files; after the completion marker is written, the shared cache supports local-only loading.
+
+### Hosted portfolio topology
+
+```mermaid
+flowchart LR
+    V[Portfolio visitor] --> W[Render Free: Next.js / BFF]
+    W -->|server-side API calls| A[Render Free: FastAPI + durable worker loop]
+    W <--> O[WorkOS AuthKit]
+    A --> N[(Neon PostgreSQL + pgvector + FTS + jobs)]
+    A --> S[(Neon private Object Storage)]
+    A --> E[Shared local ONNX INT8 E5 session]
+    E --> N
+```
+
+Render hosts two Free web services: `knowflow-web` and `knowflow-backend`; Neon is the database and private S3-compatible object store. There is no Render database and no public PDF bucket. WorkOS authenticates; KnowFlow memberships authorize. The backend receives database, storage, and WorkOS API credentials; the Next.js service receives its server-side WorkOS configuration and backend URL. Browser-visible configuration is limited to the redirect URL and never contains backend credentials.
+
+The backend runs `uvicorn app.main:app` from `backend/Dockerfile.onnx`. The image contains CPU ONNX Runtime and the pinned INT8 E5 artifact, and excludes PyTorch and Sentence Transformers. Configure backend runtime values through `render.yaml` and Render's secret environment settings. Set these backend environment-variable names in the service dashboard:
+
+```text
+KNOWFLOW_DATABASE_URL
+KNOWFLOW_OBJECT_STORAGE_ENDPOINT_URL
+KNOWFLOW_OBJECT_STORAGE_REGION
+KNOWFLOW_OBJECT_STORAGE_BUCKET
+KNOWFLOW_OBJECT_STORAGE_ACCESS_KEY
+KNOWFLOW_OBJECT_STORAGE_SECRET_KEY
+WORKOS_CLIENT_ID
+WORKOS_API_KEY
+WORKOS_ISSUER
+WORKOS_TOKEN_AUDIENCE
+```
+
+The web service uses these environment-variable names:
+
+```text
+WORKOS_CLIENT_ID
+WORKOS_API_KEY
+WORKOS_COOKIE_PASSWORD
+API_INTERNAL_BASE_URL
+NEXT_PUBLIC_WORKOS_REDIRECT_URI
+```
+
+Values belong in Render's service dashboard; never put secrets in Git or browser-exposed variables.
+
+For the WorkOS production application, set the redirect/callback URI to `<FRONTEND_URL>/callback`, the initiate-login URI to `<FRONTEND_URL>/sign-in`, and the sign-out URI to `<FRONTEND_URL>/`. Use the same callback for `NEXT_PUBLIC_WORKOS_REDIRECT_URI`; configure the backend issuer and token audience from that same WorkOS environment. Keep local development redirect URIs alongside the production ones. The API key and cookie password stay only in server-side service settings.
+
+The backend's non-secret runtime settings are:
+
+```text
+KNOWFLOW_APP_ENV=production
+KNOWFLOW_RUN_WORKER_IN_API=true
+KNOWFLOW_EMBEDDING_BACKEND=onnx
+KNOWFLOW_EMBEDDING_BATCH_SIZE=1
+KNOWFLOW_WORKER_POLL_INTERVAL_SECONDS=600
+KNOWFLOW_MAX_UPLOAD_BYTES=8388608
+KNOWFLOW_MAX_PDF_PAGES=250
+```
+
+Render Free can stop services after inactivity. The web startup notice polls backend readiness for at most 24 attempts, with an 8-second request timeout and 5-second intervals, then offers Retry; this is bounded and sends no keep-alive traffic. When the backend starts, it initializes the single shared ONNX provider before readiness, starts the durable worker thread, then serves requests. An upload signals the worker immediately. The worker processes one job at a time. If the instance stops during a job, the job row remains in Neon and lease expiry makes it recoverable after restart.
+
+### Migrations and routine maintenance
+
+For a release that changes the schema, run `alembic upgrade head` against the Neon URL using a one-off backend environment with the production secrets, then verify `alembic current` and `alembic check`. The current deployed head is `0005_embeddings_retrieval`; the existing migrations were verified against Neon. Do not create a Render database. Keep Render auto-deploy disabled as configured: deploy the reviewed commit from the Render dashboard, check backend `/health/live` and `/health/ready`, then check frontend `/api/health/live` and `/api/health/ready`. For code/configuration changes use Render's manual deploy/restart controls; never edit production credentials in source control. Readiness checks the database, vector extension, initialized embedding provider, and in-process worker without embedding a health-check question.
+
+### Release smoke test
+
+1. Open the public frontend; allow its bounded “Starting demo environment…” wait if the backend slept.
+2. Sign in through WorkOS and verify the workspace loads.
+3. Upload the sample HR text PDF and wait for `READY`.
+4. Ask “How much vacation time do staff get?” and verify evidence for 25 working days with page 2 provenance.
+5. Open the protected source and download it; verify unauthorized direct object access remains denied.
+6. Delete the test document, confirm it disappears from normal access, then sign out.
+
+Free-tier service sleep, limited memory/CPU/storage, low quotas, and no SLA are accepted portfolio trade-offs. Neon and Render quotas and account terms can change; confirm current dashboard limits before relying on the demo. No automated deployment workflow exists; GitHub Actions is CI only.
 
 ## 17. Database migrations
 
@@ -469,32 +552,33 @@ npm run typecheck
 npm run build
 ```
 
-The PostgreSQL integration tests need `KNOWFLOW_DATABASE_URL` to point to the Compose pgvector database, migrations applied, and test configuration. `docker compose run --rm api pytest` is the usual full backend suite; PostgreSQL-specific tests may be skipped unless that integration URL is configured, as reflected in the test fixtures/environment.
+The PostgreSQL integration tests need `KNOWFLOW_DATABASE_URL` to point to the Compose pgvector database, migrations applied, and test configuration. `docker compose run --rm api pytest` is the usual full backend suite; PostgreSQL-specific tests may be skipped unless that integration URL is configured, as reflected in the test fixtures/environment. CI installs the ONNX runtime extra so the ONNX provider adapter tests run instead of skipping. The full quantized model benchmark and provider/retrieval comparison were run as the M8.1 Docker proof and are not repeated on every CI run.
 
 ## 19. CI/CD
 
 The only checked-in workflow is `.github/workflows/ci.yml`. It runs on pull requests and pushes to `main`, with repository contents read-only.
 
-**Backend job:** Ubuntu runner starts `pgvector/pgvector:pg16` as a PostgreSQL service with a health check. It sets test environment/database URL, installs Python 3.12, caches pip inputs, installs the CPU-only `torch==2.8.0+cpu` wheel then the project/dev dependencies constrained by `constraints-linux-cpu.txt`, and runs Ruff, `alembic upgrade head`, `alembic check`, and `pytest`.
+**Backend job:** Ubuntu runner starts `pgvector/pgvector:pg16` as a PostgreSQL service with a health check. It sets test environment/database URL, installs Python 3.12, caches pip inputs, installs the CPU-only `torch==2.8.0+cpu` wheel and the project `dev`, `local-embeddings`, and `deployment-onnx` extras under `constraints-linux-cpu.txt`, then runs Ruff, `alembic upgrade head`, `alembic check`, and `pytest`. This exercises PyTorch and ONNX provider adapter tests in CI; the full pinned ONNX model benchmark is a separate M8.1 verification.
 
-**Frontend job:** Ubuntu runner sets up Node 22 and npm cache, runs `npm ci`, then lint, TypeScript typecheck, and Next.js production build.
+**Frontend job:** Ubuntu runner sets up Node 22 and npm cache, runs `npm ci`, then frontend helper tests, lint, TypeScript typecheck, and Next.js production build.
 
-This is **continuous integration**, not deployment. The workflow does not publish images, deploy an environment, or run the frontend's `npm test` command. Public portfolio deployment is a later M8 task; no M8 implementation is present here.
+This is **continuous integration**, not deployment. It does not publish images or deploy an environment. Render auto-deploy is disabled in `render.yaml`; releases are manually deployed from the Render dashboard after review.
 
 ## 20. Failure scenarios and safe behavior
 
 | Failure | Current behavior |
 |---|---|
 | PostgreSQL unavailable | API database operations fail; readiness reports unhealthy. Worker cannot claim jobs and logs/retries the polling loop. No local data is invented. |
-| MinIO unavailable during upload | Upload fails without a ready document; no public object URL is exposed. |
+| Local MinIO or hosted private object storage unavailable during upload | Upload fails without a ready document; no public object URL is exposed. Hosted storage credentials remain on the backend. |
 | Invalid, encrypted, over-limit, or over-page PDF | Upload validation rejects it; unsupported/scanned/no-text content fails processing explicitly. OCR is not attempted. |
 | Object write succeeds, metadata/job transaction fails | Service rolls back SQL and attempts compensating object deletion. If compensation fails, it logs the opaque key for support. |
 | Worker crashes | The job remains RUNNING until lease expiry. Another worker can reclaim it; the attempt count is bounded. |
-| Local model download/cache fails | Worker does not claim a document job until model setup succeeds; a transient setup failure is logged and retried. Incomplete downloads do not establish the successful-cache marker. API search returns a safe provider error if model setup fails. |
+| Local model download/cache fails | The local worker does not claim a document job until model setup succeeds; a transient setup failure is retried. Hosted ONNX model files are baked into the image, so there is no runtime model download; image build/deploy must succeed. |
 | Embedding or extraction fails | Classified transient/permanent where possible; a safe error code/message and retry schedule are persisted. READY is only committed with pages/chunks/vectors. |
 | Two workers see the same eligible job | PostgreSQL row locking with `SKIP LOCKED` allows only one claim; fencing token checks protect final writes. |
 | Document deleted during or before work | Deletion revokes access, removes derived data and cancels the job. Worker claim/persistence also checks deletion and current lease. |
 | User changes another workspace's ID | Membership check and workspace-scoped SQL produce 404 for inaccessible resources; composite constraints prevent cross-tenant associations. |
+| Render backend is asleep | The frontend shows a bounded startup notice, checks readiness, and continues when the API wakes. No keep-alive request is used. |
 | Search/Ask fails | API returns a safe structured error. UI shows a generic retry message; internal scores and exceptions are not exposed. |
 | Weak or unsupported question | Ask does not invent an answer. It labels weak related passages as such or shows no evidence cards. |
 
@@ -504,7 +588,7 @@ All current records are in `docs/adr/`. Decisions are scoped to V1; changing one
 
 | ADR | Problem → decision | Benefit and trade-off |
 |---|---|---|
-| 0001 Modular monolith | Avoid distributed operations for a small portfolio product; use Next.js plus modular FastAPI and a separate worker process from the same backend code. | Clear code modules and independent API/worker processes; less independent scaling than true service boundaries, but easier operation. |
+| 0001 Modular monolith | Keep Next.js and modular FastAPI; worker process topology may differ by environment. | Clear domain modules without distributed-service overhead. Local API/worker are separate; constrained hosting consolidates the existing worker loop in FastAPI and shares its model session. |
 | 0002 WorkOS AuthKit | Avoid owning credentials, resets, and verification; use managed OIDC and server-side BFF cookies. | Strong identity boundary; external identity configuration and provider availability are required. |
 | 0003 Application tenant checks | Use membership authorization, mandatory scoped SQL, and composite constraints; defer PostgreSQL RLS. | Explicit and testable; every query must retain scope, while constraints provide integrity rather than read authorization. |
 | 0004 Object storage/deletion | Keep PDF bytes private in an adapter-backed object store; tombstone then clean up. | DB remains relational and access revokes immediately; object/DB cleanup needs retries because it is not one transaction. |
@@ -512,8 +596,8 @@ All current records are in `docs/adr/`. Decisions are scoped to V1; changing one
 | 0006 Chunk/vector storage | Store one active vector on each chunk with page/hash/model metadata. | Simple retrieval join; model changes need controlled re-embedding and possibly schema changes. |
 | 0007 Hybrid retrieval | Combine Postgres FTS and pgvector ranks using configurable RRF. | Exact terms and paraphrases complement each other; RRF improves ranking but is not calibrated confidence. |
 | 0008 Product boundaries | Keep V1 to multi-user workspaces, areas, text PDFs, source evidence, no OCR/history/LLM. | Complete core journey without uncontrolled scope; users interpret evidence rather than receiving synthesized answers. |
-| 0009 Public portfolio demo | At M8 choose a public demo host and prefer practical free tiers; don't reshape architecture in advance. | Cost-aware deployment choices later; public availability/security are still future work. |
-| 0010 Local embedding model | Use pinned MIT `intfloat/e5-small-v2`, CPU, local cache, 384 dimensions. | No paid inference, API key or GPU; local CPU/RAM and first model download are required. |
+| 0009 Public portfolio demo | Render Free for frontend/backend, Neon for PostgreSQL/pgvector/FTS and private S3 storage, WorkOS retained. | Public HTTPS demo at $0 recurring target; sleeping services and low quotas accepted, with no SLA. Deployment is manually triggered. |
+| 0010 Local embedding model | Keep pinned MIT `intfloat/e5-small-v2`, CPU, normalized 384 dimensions; PyTorch locally and ONNX INT8 for the hosted image. | Avoid paid inference and fit the 512 MiB backend limit at batch size 1. Distinct embedding-version metadata means provider changes require re-embedding. |
 | 0011 Evidence Q&A without generation | Return deterministic selected source passages; use lexical, semantic, structure, and answer-type signals. | No generative hallucination or question charge; no prose synthesis and heuristic classification can remain ambiguous. |
 
 ### Zero-charge portfolio constraint
@@ -542,7 +626,7 @@ The paths below follow current request boundaries. File names are repository-rel
 
 ### E. Worker processing and embeddings
 
-`python -m app.jobs.worker` → `run_worker()` loads local model before claiming work → `claim_next_job()` locks an eligible job with PostgreSQL `SKIP LOCKED`, assigns lease token → `process_claim()` reads PDF from `ObjectStorage`, calls `extract_pdf_pages()`, `chunk_pages()`, provider `embed(... purpose="document")` → `persist_processed_output()` verifies fence and atomically persists pages/chunks/vectors and READY/SUCCEEDED.
+Local: `python -m app.jobs.worker` → `run_worker()` loads the local model before claiming work → `claim_next_job()` locks an eligible job with PostgreSQL `SKIP LOCKED`, assigns lease token → `process_claim()` reads PDF through `ObjectStorage`, extracts/chunks, embeds with `purpose="document"` → `persist_processed_output()` verifies the fence and atomically persists pages/chunks/vectors and READY/SUCCEEDED. Hosted: FastAPI lifespan initializes one ONNX provider and passes that same object to Ask/search and `run_worker()` in a thread; upload wakeups avoid waiting for the long idle poll. The durable claim/lease/retry/fence/commit path is unchanged.
 
 ### F. Ask KnowFlow question
 
@@ -596,11 +680,11 @@ Owner confirms delete in document UI → Server Action → `DELETE /api/v1/works
 
 ### Explain KnowFlow in two minutes
 
-> KnowFlow is a multi-tenant knowledge platform for internal business PDFs. WorkOS AuthKit authenticates users, while PostgreSQL `workspace_memberships` defines Owner/Member access. Owners organize documents into Knowledge Areas and upload private text-based PDFs. A separate worker from the FastAPI codebase claims durable PostgreSQL jobs, extracts page text with pypdf, creates deterministic page-aware chunks, and embeds them locally with a pinned CPU E5 model. PostgreSQL stores metadata and chunks; MinIO stores originals. Search combines PostgreSQL full-text search with pgvector cosine retrieval using Reciprocal Rank Fusion. Ask KnowFlow adds a deterministic evidence-quality layer, then displays verbatim source passages and protected document/page links. It does not generate answers or call a paid AI API. This demonstrates authentication boundaries, tenant isolation, relational modeling, asynchronous jobs, failure handling, object storage, testing, and practical search engineering.
+> KnowFlow is a multi-tenant knowledge platform for internal business PDFs. WorkOS AuthKit authenticates users, while PostgreSQL `workspace_memberships` defines Owner/Member access. Owners organize documents into Knowledge Areas and upload private text-based PDFs. The same backend codebase claims durable PostgreSQL jobs, extracts page text with pypdf, creates deterministic page-aware chunks, and embeds them locally with a pinned CPU E5 model. Local development uses a separate worker container, PostgreSQL, and MinIO; the hosted portfolio demo uses an in-process worker and shared ONNX session, Neon PostgreSQL, and private Neon Object Storage. Search combines PostgreSQL full-text search with pgvector cosine retrieval using Reciprocal Rank Fusion. Ask KnowFlow adds a deterministic evidence-quality layer, then displays verbatim source passages and protected document/page links. It does not generate answers or call a paid AI API. This demonstrates authentication boundaries, tenant isolation, relational modeling, asynchronous jobs, failure handling, object storage, testing, and practical search engineering.
 
 ### Explain KnowFlow technically in 5-10 minutes
 
-Start with the identity boundary (AuthKit cookie in Next, server-side short-lived token, JWT/JWKS validation, immutable `sub` mapping). Explain that KnowFlow membership is the authorization source. Then describe the modular monolith and its two backend processes. Follow upload from validation through private object write and transactional metadata/job creation. Explain PostgreSQL `SKIP LOCKED`, leases, heartbeat and fencing token, then the pypdf/page/chunk/local embedding pipeline and atomic READY commit. For retrieval, contrast FTS and vector similarity, explain RRF, tenant/status/model filters, and why E5 is local. Finish with Ask's deterministic quality/deduplication/provenance layer, zero-LLM boundary, tests and trade-offs.
+Start with the identity boundary (AuthKit cookie in Next, server-side short-lived token, JWT/JWKS validation, immutable `sub` mapping). Explain that KnowFlow membership is the authorization source. Then describe the modular monolith and its two runtime topologies: local separate API/worker containers and hosted FastAPI with its in-process durable worker. Follow upload from validation through private object write and transactional metadata/job creation. Explain PostgreSQL `SKIP LOCKED`, leases, heartbeat and fencing token, then the pypdf/page/chunk/local embedding pipeline and atomic READY commit. Compare local PyTorch E5 with the memory-tested hosted ONNX runtime. For retrieval, contrast FTS and vector similarity, explain RRF, tenant/status/model filters, and why E5 is local. Finish with Ask's deterministic quality/deduplication/provenance layer, zero-LLM boundary, tests and trade-offs.
 
 ### Questions and model answers
 
@@ -633,9 +717,14 @@ Start with the identity boundary (AuthKit cookie in Next, server-side short-live
 27. **What if a worker crashes?** Its row remains RUNNING until the lease expires. Another worker can reclaim it; attempt limits/backoff bound retries.
 28. **How would you scale this?** Measure queue age, processing duration, DB query latency and corpus size first. Add worker replicas (already supported by row locking), tune indexes and CPU/cache. Consider approximate vector indexes or a dedicated queue only when measurements justify the complexity.
 29. **What would you change for enterprise deployment?** Evaluate managed PostgreSQL/object storage, backups, secret management, observability, retention/compliance requirements, rate limits across replicas, and perhaps RLS as defense-in-depth. Preserve application authorization and test tenant isolation.
-30. **Why a modular monolith?** One developer and one product do not need distributed service operations. Domain modules create boundaries now; API and worker can scale as separate processes, and extraction to services can wait for an independent scaling/team need.
+30. **Why a modular monolith?** One product does not need distributed service operations. Domain modules keep code boundaries clear. Local API and worker run separately; the portfolio backend combines the worker loop only to fit the free memory budget while preserving durable jobs.
 31. **How are partial failures handled?** Upload compensates object writes if SQL fails; worker commits derived data and READY together; delete commits access revocation before attempting object cleanup and retains a tombstone for retry.
 32. **What tests need PostgreSQL?** pgvector cosine operators, FTS ranking/index behavior, Alembic schema and `SKIP LOCKED` concurrency. SQLite fixtures test much application logic but cannot validate those PostgreSQL-specific behaviors.
+33. **How does E5 fit the free hosted backend?** The hosted image uses the same pinned E5-small-v2 model as portable dynamic-INT8 ONNX, CPU-only, and batch size 1. The artifact is baked into the image; one ONNX session serves Ask queries and the worker. The 512 MiB Docker proof measured 306.16 MiB process peak RSS without OOM. Local development keeps PyTorch/Sentence Transformers.
+34. **Why is the hosted worker inside FastAPI?** Render Free has a tight memory budget. One backend service avoids a second process loading another model instance. It still claims durable PostgreSQL jobs with leases, retries, and fencing; it does not use in-memory background tasks. Local Compose keeps a separate worker.
+35. **What happens when Render sleeps?** The frontend uses bounded readiness retries and explains that the demo is starting. After the backend starts, readiness checks PostgreSQL/pgvector and the initialized ONNX/worker runtime. No keep-alive traffic is used. A job interrupted by shutdown remains in PostgreSQL and becomes claimable after its lease expires.
+36. **Why Neon for hosted persistence?** It provides PostgreSQL compatibility including pgvector and FTS for the existing migrations and retrieval SQL, plus private S3-compatible object storage for a tiny portfolio corpus. This avoids another data abstraction; the trade-off is reliance on free-tier quotas and provider behavior.
+37. **How are hosted and local embeddings kept safe?** They use the same model revision, prefixes, normalization, and vector dimensions, but separate pipeline version metadata. Paired cosine similarity was high and retrieval cases passed; the application still requires re-embedding instead of silently mixing provider-version vectors.
 
 ## 25. Limitations and future work
 
@@ -643,10 +732,11 @@ Start with the identity boundary (AuthKit cookie in Next, server-side short-live
 
 - Only text/selectable PDFs are supported; there is no OCR or DOCX/image ingestion.
 - Ask KnowFlow does not generate, summarize, or paraphrase answers and has no persisted conversation history.
-- Evidence classification is deterministic and heuristic. It can reject a valid unusual paraphrase or return weak related material; labels are not calibrated confidence values.
-- No document version comparison/change intelligence, analytics platform, invitations workflow, billing, or enterprise granular permissions are implemented in V1.
-- Tombstone purge is opportunistic during operations rather than driven by a scheduled cleanup service.
-- The project is not deployed as a public demo yet; M8 has not started.
+- Evidence classification is deterministic and heuristic. It can reject a valid unusual paraphrase or select a less-specific sentence when a retrieved chunk contains several related facts. For example, “How often are backups performed?” can select the quarterly restoration-testing sentence even when the same retrieved chunk also contains the daily-backup statement. This is a known M6 selection limitation observed with both embedding providers; it is not an ONNX retrieval regression.
+- Hosted processing is intentionally one document job at a time and uses ONNX embedding batch size 1. Render Free can cold-start, has constrained resources/quotas, and has no SLA.
+- PyTorch and ONNX vectors have separate embedding-version metadata. Do not mix the provider versions in one active corpus; re-embed documents when changing provider/version.
+- The hosted object store is Neon Object Storage and remains private behind the API adapter; the portfolio demo relies on the provider's S3-compatible behavior and current free-tier terms.
+- No document version comparison/change intelligence, analytics platform, invitations workflow, billing, or enterprise granular permissions are implemented in V1. Tombstone purge is opportunistic during operations rather than driven by a scheduled cleanup service.
 
 ### Possible future improvements (not committed scope)
 
@@ -676,8 +766,8 @@ Read sections 20-25 and ADRs 0001-0011. Practice the interview questions. For ea
 
 ### Level 6: Debug and modify independently
 
-Start Compose, apply migrations, inspect worker logs, run a focused API/processing test, and run PostgreSQL retrieval tests. Make a small change only after locating its owning module, request contract, tenant check, migration impact, and relevant tests. Commands are in sections 16 and 18.
+Start Compose, apply migrations, inspect worker logs, run a focused API/processing test, and run PostgreSQL retrieval tests. For hosted maintenance, inspect Render health, Neon migration head, and the release smoke checklist in section 16. Make a small change only after locating its owning module, request contract, tenant check, migration impact, and relevant tests. Commands are in sections 16 and 18.
 
 ## Appendix A. Milestone history
 
-The main guide above describes the integrated current system, not a historical snapshot. Milestones were delivered incrementally: M1 foundation; M2 identity and tenancy; M3 Knowledge Areas/documents; M4 durable processing and chunks; M5 local embeddings and hybrid retrieval; M6 evidence-based Q&A without generation; M7 UX and application hardening. M5 superseded early M4-era descriptions that discussed unpopulated vectors or no search. M7 changed the frontend experience but intentionally preserved backend, retrieval, evidence, and database architecture.
+The main guide above describes the integrated current system, not a historical snapshot. Milestones were delivered incrementally: M1 foundation; M2 identity and tenancy; M3 Knowledge Areas/documents; M4 durable processing and chunks; M5 local embeddings and hybrid retrieval; M6 evidence-based Q&A without generation; M7 UX and application hardening; M8 free-tier Render/Neon deployment, portable ONNX embedding runtime, and release verification. M5 superseded early M4-era descriptions that discussed unpopulated vectors or no search. M7 preserved backend, retrieval, evidence, and database architecture. M8 changed hosted process topology and runtime packaging while retaining the durable jobs and approved M5/M6 behavior.
