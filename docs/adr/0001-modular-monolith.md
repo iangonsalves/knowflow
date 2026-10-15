@@ -8,7 +8,7 @@ KnowFlow needs a web UI, REST API and long-running document worker. It is a smal
 
 ## Decision
 
-Use a modular monolith: Next.js/TypeScript frontend and one Python/FastAPI backend codebase with explicit domain modules. Run the worker as a separate process from the same backend image. Use PostgreSQL as system of record and pgvector for vectors.
+Use a modular monolith: Next.js/TypeScript frontend and one Python/FastAPI backend codebase with explicit domain modules. Run the worker as a separate process from the same backend image in local development. For the constrained Render Free portfolio deployment, run the existing durable worker loop in the FastAPI process and share its ONNX embedding provider. Use PostgreSQL as system of record and pgvector for vectors.
 
 ## Alternatives
 
@@ -17,4 +17,4 @@ Use a modular monolith: Next.js/TypeScript frontend and one Python/FastAPI backe
 
 ## Consequences
 
-Domain boundaries remain visible without distributed-system overhead. API and worker can scale as separate processes later. Modules communicate through in-process services; durable DB contracts connect API and worker. A future service split requires evidence of independent scaling or ownership needs.
+Domain boundaries remain visible without distributed-system overhead. Local API and worker can be developed and operated separately; hosted process consolidation fits the portfolio memory budget while keeping durable PostgreSQL job contracts and worker logic unchanged. Modules communicate through in-process services; a future service split requires evidence of independent scaling or ownership needs.

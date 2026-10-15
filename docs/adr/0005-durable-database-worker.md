@@ -8,7 +8,7 @@ PDF extraction and embedding calls can outlast HTTP requests and must survive AP
 
 ## Decision
 
-Use one durable PostgreSQL processing job record per document, with attempt count and last failure code. A separate worker process from the backend image claims jobs with row locking and `SKIP LOCKED`, leases work, retries transient failures with bounded backoff, and writes derived output idempotently. Do not add Redis in V1, including solely for single-instance rate limiting. Revisit rate-limit enforcement only if deployment becomes multi-instance.
+Use one durable PostgreSQL processing job record per document, with attempt count and last failure code. The worker loop claims jobs with row locking and `SKIP LOCKED`, leases work, retries transient failures with bounded backoff, and writes derived output idempotently. Local development runs it as a separate process from the backend image. The constrained hosted portfolio service runs the same loop inside FastAPI, one document at a time, sharing the configured ONNX embedding provider. Do not add Redis in V1, including solely for single-instance rate limiting. Revisit rate-limit enforcement only if deployment becomes multi-instance.
 
 ## Alternatives
 
