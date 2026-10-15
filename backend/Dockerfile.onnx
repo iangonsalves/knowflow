@@ -75,3 +75,7 @@ COPY --from=reference-builder /opt/reference-e5 /opt/reference-e5
 RUN python -c 'import torch, sentence_transformers; print("Comparison image has CPU torch", torch.__version__, "and Sentence Transformers", sentence_transformers.__version__)'
 USER knowflow
 CMD ["python", "scripts/compare_embedding_providers.py"]
+
+# Render builds the last stage by default. Keep the lean API runtime as that
+# default while retaining benchmark/compare as explicit local build targets.
+FROM runtime AS deployment
